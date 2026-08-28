@@ -1,0 +1,2 @@
+{"role":"user","message":{"content":[{"type":"text","text":"<timestamp>Wednesday, Aug 26, 2026, 1:29 AM (UTC-3)</timestamp>\n<user_query>\nCursor distinctive phrase zebra-pluto-419\n</user_query>"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"I can help with zebra-pluto-419."},{"type":"tool_use","name":"Read","input":{"path":"/tmp/secret-tool-dump.json"}}]}}

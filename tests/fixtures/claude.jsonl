@@ -1,0 +1,6 @@
+{"type":"mode","mode":"normal","sessionId":"claude-fixture-1"}
+{"type":"file-history-snapshot","snapshot":{"trackedFileBackups":{}}}
+{"type":"user","message":{"role":"user","content":"<local-command-caveat>Caveat: ignore this.</local-command-caveat>"},"isMeta":true,"cwd":"/tmp/claude-proj","sessionId":"claude-fixture-1","timestamp":"2026-08-26T01:00:00.000Z"}
+{"type":"user","message":{"role":"user","content":"Claude distinctive phrase mango-helix-882"},"cwd":"/tmp/claude-proj","sessionId":"claude-fixture-1","timestamp":"2026-08-26T01:00:01.000Z"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"plan"},{"type":"text","text":"Working on mango-helix-882"},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"cat /tmp/secret-tool-dump.json"}}]},"cwd":"/tmp/claude-proj","sessionId":"claude-fixture-1","timestamp":"2026-08-26T01:00:02.000Z"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"secret-tool-dump"}]},"cwd":"/tmp/claude-proj","sessionId":"claude-fixture-1","timestamp":"2026-08-26T01:00:03.000Z"}
