@@ -48,7 +48,10 @@ func ParseFile(path, source string) (*model.Session, error) {
 		}
 		if before.ModTime() == after.ModTime() && before.Size() == after.Size() {
 			s.Path = path
-			s.MTime = float64(after.ModTime().UnixNano()) / 1e9
+			// Python's os.stat_result.st_mtime is formed as seconds plus the
+			// fractional nanoseconds. Keep the operations separate so IEEE-754
+			// rounding matches Python exactly when reusing its live index.
+			s.MTime = float64(after.ModTime().Unix()) + float64(after.ModTime().Nanosecond())/1e9
 			s.Size = after.Size()
 			fallback := after.ModTime().UTC().Format("2006-01-02T15:04:05Z")
 			if s.UpdatedAt == nil {
