@@ -48,9 +48,8 @@ func ParseFile(path, source string) (*model.Session, error) {
 		}
 		if before.ModTime() == after.ModTime() && before.Size() == after.Size() {
 			s.Path = path
-			// Python's os.stat_result.st_mtime is formed as seconds plus the
-			// fractional nanoseconds. Keep the operations separate so IEEE-754
-			// rounding matches Python exactly when reusing its live index.
+			// Keep the operations separate so IEEE-754 rounding matches indexes
+			// created by earlier releases.
 			s.MTime = float64(after.ModTime().Unix()) + float64(after.ModTime().Nanosecond())/1e9
 			s.Size = after.Size()
 			fallback := after.ModTime().UTC().Format("2006-01-02T15:04:05Z")
@@ -123,8 +122,14 @@ func parseObject(s *model.Session, obj map[string]any, path string) {
 		if s.CWD == nil {
 			s.CWD = mapString(obj, "cwd")
 		}
-		if mapString(obj, "sessionId") != nil && s.ID == strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)) {
-			s.ID = *mapString(obj, "sessionId")
+		if sessionID := mapString(obj, "sessionId"); sessionID != nil {
+			if strings.Contains(filepath.ToSlash(path), "/subagents/") {
+				if s.ParentID == nil {
+					s.ParentID = sessionID
+				}
+			} else if s.ID == strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)) {
+				s.ID = *sessionID
+			}
 		}
 		if agent := mapString(obj, "agentId"); agent != nil && strings.Contains(filepath.ToSlash(path), "/subagents/") {
 			s.ID = *agent
@@ -209,7 +214,7 @@ func addTurn(s *model.Session, role, text string, cursor bool) {
 	}
 	text = strings.TrimSpace(text)
 	if text != "" {
-		s.Turns = append(s.Turns, model.Turn{role, text})
+		s.Turns = append(s.Turns, model.Turn{Role: role, Text: text})
 	}
 }
 func blockText(v any) string {

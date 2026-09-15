@@ -2,6 +2,8 @@ package indexer
 
 import (
 	"database/sql"
+	"os"
+
 	"github.com/usuario/sessions/internal/config"
 	"github.com/usuario/sessions/internal/store"
 	"github.com/usuario/sessions/internal/transcript"
@@ -28,14 +30,20 @@ func Refresh(db *sql.DB) (Stats, error) {
 	seen := map[string]bool{}
 	for _, item := range config.Discover() {
 		seen[item.Path] = true
-		s, err := transcript.ParseFile(item.Path, item.Source)
+		info, err := os.Stat(item.Path)
 		if err != nil {
 			stats.Failed++
 			continue
 		}
 		prev, exists := existing[item.Path]
-		if exists && prev[0] == s.MTime && int64(prev[1]) == s.Size {
+		mtime := float64(info.ModTime().Unix()) + float64(info.ModTime().Nanosecond())/1e9
+		if exists && prev[0] == mtime && int64(prev[1]) == info.Size() {
 			stats.Unchanged++
+			continue
+		}
+		s, err := transcript.ParseFile(item.Path, item.Source)
+		if err != nil {
+			stats.Failed++
 			continue
 		}
 		if err := store.Upsert(tx, s); err != nil {

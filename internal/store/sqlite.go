@@ -52,7 +52,7 @@ func Open(path string) (*sql.DB, error) {
 	}
 	if version != "" && version != SchemaVersion {
 		db.Close()
-		return nil, fmt.Errorf("unsupported sessions schema version %q; rebuild the index or use the Python CLI", version)
+		return nil, fmt.Errorf("unsupported sessions schema version %q; remove the index and rebuild it", version)
 	}
 	if _, err = db.Exec(schema); err != nil {
 		db.Close()
