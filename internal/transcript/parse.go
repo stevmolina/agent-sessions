@@ -312,7 +312,14 @@ func cursorCWD(path string) string {
 }
 
 func Format(s *model.Session, limit int) string {
-	lines := []string{fmt.Sprintf("# id=%s source=%s cwd=%s", s.ID, s.Source, value(s.CWD)), fmt.Sprintf("# started=%s updated=%s", value(s.StartedAt), value(s.UpdatedAt)), "# path=" + s.Path}
+	provider := s.Provider
+	if provider == "" {
+		provider = s.Source
+	}
+	lines := []string{fmt.Sprintf("# id=%s source=%s provider=%s cwd=%s", s.ID, s.Source, provider, value(s.CWD)), fmt.Sprintf("# started=%s updated=%s", value(s.StartedAt), value(s.UpdatedAt)), "# path=" + s.Path}
+	if s.Archived {
+		lines = append(lines, "# archived=true")
+	}
 	if s.ParentID != nil {
 		lines = append(lines, "# parent_id="+*s.ParentID)
 	}

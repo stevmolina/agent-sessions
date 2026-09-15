@@ -3,14 +3,24 @@ package model
 type Turn struct{ Role, Text string }
 
 type Session struct {
-	ID, Source, Path, Title, Body       string
-	CWD, StartedAt, UpdatedAt, ParentID *string
-	MTime                               float64
-	Size                                int64
-	Turns                               []Turn
+	ID, Source, Provider, Path, Title, Body string
+	ProviderInstanceID, ProviderSessionID   *string
+	ProjectID, OriginPath, RecordID         string
+	CWD, StartedAt, UpdatedAt, ParentID     *string
+	Model, Branch, WorktreePath             *string
+	Archived                                bool
+	MTime                                   float64
+	Size                                    int64
+	Revision                                string
+	Turns                                   []Turn
 }
 
 type Row struct {
-	ID, Source, Path, Title             string
-	CWD, StartedAt, UpdatedAt, ParentID *string
+	ID, Source, Provider, Path, Title     string
+	ProviderInstanceID, ProviderSessionID *string
+	OriginPath, RecordID                  string
+	CWD, StartedAt, UpdatedAt, ParentID   *string
+	Model, Branch, WorktreePath           *string
+	Archived                              bool
+	Revision                              string
 }

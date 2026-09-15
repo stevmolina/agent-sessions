@@ -2,14 +2,16 @@ package indexer
 
 import (
 	"database/sql"
-	"os"
 
-	"github.com/usuario/sessions/internal/config"
+	"github.com/usuario/sessions/internal/model"
+	"github.com/usuario/sessions/internal/source"
 	"github.com/usuario/sessions/internal/store"
-	"github.com/usuario/sessions/internal/transcript"
 )
 
-type Stats struct{ Upserted, Unchanged, Deleted, Failed int }
+type Stats struct {
+	Upserted, Unchanged, Deleted, Failed int
+	Warnings                             []string
+}
 
 func Refresh(db *sql.DB) (Stats, error) {
 	var stats Stats
@@ -28,28 +30,30 @@ func Refresh(db *sql.DB) (Stats, error) {
 		}
 	}()
 	seen := map[string]bool{}
-	for _, item := range config.Discover() {
-		seen[item.Path] = true
-		info, err := os.Stat(item.Path)
+	for _, adapter := range source.Adapters() {
+		candidates, err := adapter.Discover()
 		if err != nil {
 			stats.Failed++
+			stats.Warnings = append(stats.Warnings, err.Error())
 			continue
 		}
-		prev, exists := existing[item.Path]
-		mtime := float64(info.ModTime().Unix()) + float64(info.ModTime().Nanosecond())/1e9
-		if exists && prev[0] == mtime && int64(prev[1]) == info.Size() {
-			stats.Unchanged++
-			continue
+		for _, item := range candidates {
+			seen[item.Locator] = true
+			prev, exists := existing[item.Locator]
+			if exists && sameRevision(item, prev) {
+				stats.Unchanged++
+				continue
+			}
+			s, err := adapter.Load(item)
+			if err != nil {
+				stats.Failed++
+				continue
+			}
+			if err := store.Upsert(tx, s); err != nil {
+				return stats, err
+			}
+			stats.Upserted++
 		}
-		s, err := transcript.ParseFile(item.Path, item.Source)
-		if err != nil {
-			stats.Failed++
-			continue
-		}
-		if err := store.Upsert(tx, s); err != nil {
-			return stats, err
-		}
-		stats.Upserted++
 	}
 	for path := range existing {
 		if !seen[path] {
@@ -59,9 +63,33 @@ func Refresh(db *sql.DB) (Stats, error) {
 			stats.Deleted++
 		}
 	}
+	if err := store.RebuildAliases(tx); err != nil {
+		return stats, err
+	}
 	if err := tx.Commit(); err != nil {
 		return stats, err
 	}
 	ok = true
 	return stats, nil
+}
+
+func sameRevision(item source.Candidate, prev store.IndexedMeta) bool {
+	if item.Source == "t3code" {
+		return item.Revision != "" && item.Revision == prev.Revision
+	}
+	return prev.MTime == item.MTime && prev.Size == item.Size
+}
+
+func CandidateFor(row model.Row) source.Candidate {
+	origin := row.OriginPath
+	if origin == "" {
+		origin = row.Path
+	}
+	return source.Candidate{
+		Locator:    row.Path,
+		Source:     row.Source,
+		OriginPath: origin,
+		RecordID:   row.RecordID,
+		Revision:   row.Revision,
+	}
 }
