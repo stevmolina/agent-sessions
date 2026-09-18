@@ -1,0 +1,44 @@
+# Build, vet, and test on every pull request and every push to main.
+#
+# go-version-file keeps the runner on whatever go.mod asks for, so bumping the
+# toolchain is a one-line change in one place.
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Nothing here writes to the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt would rewrite these files:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./...
