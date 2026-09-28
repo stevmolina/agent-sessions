@@ -16,7 +16,7 @@ func TestIndexSearchShowLifecycle(t *testing.T) {
 	roots := installFixtures(t)
 
 	code, stdout, stderr := run("index")
-	if code != 0 || stdout != "" || stderr != "3 upserted, 0 unchanged, 0 deleted, 0 failed\n" {
+	if code != 0 || stdout != "" || stderr != secretsWarning()+"3 upserted, 0 unchanged, 0 deleted, 0 failed\n" {
 		t.Fatalf("first index: code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 
@@ -36,7 +36,7 @@ func TestIndexSearchShowLifecycle(t *testing.T) {
 	}
 
 	code, _, stderr = run("index")
-	if code != 0 || stderr != "0 upserted, 3 unchanged, 0 deleted, 0 failed\n" {
+	if code != 0 || stderr != secretsWarning()+"0 upserted, 3 unchanged, 0 deleted, 0 failed\n" {
 		t.Fatalf("unchanged index: code=%d stderr=%q", code, stderr)
 	}
 	cursor := filepath.Join(roots.cursor, "Users-tmp-proj", "agent-transcripts", "aaaa", "aaaa.jsonl")
@@ -45,7 +45,7 @@ func TestIndexSearchShowLifecycle(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(cursor, 0o644) })
 	code, _, stderr = run("index")
-	if code != 0 || stderr != "0 upserted, 3 unchanged, 0 deleted, 0 failed\n" {
+	if code != 0 || stderr != secretsWarning()+"0 upserted, 3 unchanged, 0 deleted, 0 failed\n" {
 		t.Fatalf("unchanged unreadable file: code=%d stderr=%q", code, stderr)
 	}
 
@@ -66,7 +66,7 @@ func TestIndexSearchShowLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, _, stderr = run("index")
-	if code != 0 || stderr != "1 upserted, 2 unchanged, 0 deleted, 0 failed\n" {
+	if code != 0 || stderr != secretsWarning()+"1 upserted, 2 unchanged, 0 deleted, 0 failed\n" {
 		t.Fatalf("changed index: code=%d stderr=%q", code, stderr)
 	}
 
@@ -75,7 +75,7 @@ func TestIndexSearchShowLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, _, stderr = run("index")
-	if code != 0 || stderr != "0 upserted, 2 unchanged, 1 deleted, 0 failed\n" {
+	if code != 0 || stderr != secretsWarning()+"0 upserted, 2 unchanged, 1 deleted, 0 failed\n" {
 		t.Fatalf("deleted index: code=%d stderr=%q", code, stderr)
 	}
 	code, stdout, _ = run("search", "quartz-ember-553")
@@ -108,6 +108,11 @@ func installFixtures(t *testing.T) fixtureRoots {
 	if err := os.MkdirAll(t3root, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	secrets := filepath.Join(root, "secrets.json")
+	if err := os.WriteFile(secrets, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SESSIONS_SECRETS_JSON", secrets)
 	t.Setenv("SESSIONS_INDEX", filepath.Join(root, "index.sqlite"))
 	t.Setenv("SESSIONS_CURSOR_ROOT", cursor)
 	t.Setenv("SESSIONS_CLAUDE_ROOT", claude)
@@ -259,6 +264,10 @@ func copyFixture(t *testing.T, name, destination string) {
 	if err := os.WriteFile(destination, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func secretsWarning() string {
+	return "warning: SESSIONS_SECRETS_JSON is set; Doppler was not read\n"
 }
 
 func run(args ...string) (int, string, string) {

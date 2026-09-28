@@ -22,6 +22,8 @@ sessions show SOURCE:ID
 
 `search` refreshes stale sources first. You do not need `index` unless you want a refresh without searching.
 
+`index` and `search` redact secrets into the local index before storing text. Transcript files are left unchanged, and `show` still prints the raw file. See [docs/remote-sync.md](docs/remote-sync.md).
+
 ## Source vs provider
 
 `source` is where you opened the conversation. `provider` is which agent ran it.

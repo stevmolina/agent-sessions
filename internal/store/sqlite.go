@@ -85,6 +85,20 @@ func Open(path string) (*sql.DB, error) {
 	return db, nil
 }
 
+func Meta(db *sql.DB, key string) (string, error) {
+	var value string
+	err := db.QueryRow("SELECT value FROM meta WHERE key=?", key).Scan(&value)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return value, err
+}
+
+func SetMeta(tx *sql.Tx, key, value string) error {
+	_, err := tx.Exec(`INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
+	return err
+}
+
 func schemaVersion(db *sql.DB) (string, error) {
 	var version string
 	err := db.QueryRow("SELECT value FROM meta WHERE key='schema_version'").Scan(&version)

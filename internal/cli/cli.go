@@ -1,11 +1,15 @@
 package cli
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 
+	"github.com/usuario/sessions/internal/clean"
 	"github.com/usuario/sessions/internal/config"
 	"github.com/usuario/sessions/internal/indexer"
 	"github.com/usuario/sessions/internal/source"
@@ -16,6 +20,9 @@ import (
 const help = `usage: sessions [-h] {index,search,show} ...
 
 Search Cursor, Claude Code, Codex, and T3 Code transcripts in place.
+
+index and search redact secrets before writing the local index. Transcript
+files on disk are not modified. show prints the raw file.
 
 positional arguments:
   {index,search,show}
@@ -76,17 +83,29 @@ func usage(w io.Writer, msg string) int {
 	fmt.Fprintln(w, "sessions: error: "+msg)
 	return 2
 }
-func open() {}
-func index(out, errOut io.Writer) int {
+func openIndex() (*sql.DB, indexer.Cleaner, error) {
 	db, err := store.Open(config.IndexPath())
+	if err != nil {
+		return nil, nil, err
+	}
+	cleaner, err := clean.Load(context.Background())
+	if err != nil {
+		db.Close()
+		return nil, nil, err
+	}
+	return db, cleaner, nil
+}
+func index(out, errOut io.Writer) int {
+	db, cleaner, err := openIndex()
 	if err != nil {
 		return fail(errOut, err)
 	}
 	defer db.Close()
-	stats, err := indexer.Refresh(db)
+	stats, err := indexer.Refresh(db, cleaner)
 	if err != nil {
 		return fail(errOut, err)
 	}
+	warnSecretsOverride(errOut)
 	printStats(errOut, stats)
 	return 0
 }
@@ -144,15 +163,16 @@ func search(args []string, out, errOut io.Writer) int {
 	if len(query) == 0 {
 		return usage(errOut, "the following arguments are required: query")
 	}
-	db, err := store.Open(config.IndexPath())
+	db, cleaner, err := openIndex()
 	if err != nil {
 		return fail(errOut, err)
 	}
 	defer db.Close()
-	stats, err := indexer.Refresh(db)
+	stats, err := indexer.Refresh(db, cleaner)
 	if err != nil {
 		return fail(errOut, err)
 	}
+	warnSecretsOverride(errOut)
 	printStats(errOut, stats)
 	hits, err := store.SearchOptsQuery(db, store.SearchOpts{
 		Query:     strings.Join(query, " "),
@@ -214,6 +234,11 @@ func show(id string, out, errOut io.Writer) int {
 	}
 	fmt.Fprint(out, transcript.Format(s, 200000))
 	return 0
+}
+func warnSecretsOverride(w io.Writer) {
+	if os.Getenv("SESSIONS_SECRETS_JSON") != "" {
+		fmt.Fprintln(w, "warning: SESSIONS_SECRETS_JSON is set; Doppler was not read")
+	}
 }
 func printStats(w io.Writer, s indexer.Stats) {
 	fmt.Fprintf(w, "%d upserted, %d unchanged, %d deleted, %d failed\n", s.Upserted, s.Unchanged, s.Deleted, s.Failed)
