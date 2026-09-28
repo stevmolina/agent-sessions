@@ -101,13 +101,13 @@ func index(out, errOut io.Writer) int {
 		return fail(errOut, err)
 	}
 	defer db.Close()
+	warnSecretsOverride(errOut)
 	stats, err := indexer.Refresh(db, cleaner)
 	if err != nil {
 		return fail(errOut, err)
 	}
-	warnSecretsOverride(errOut)
 	printStats(errOut, stats)
-	return 0
+	return statsCode(stats)
 }
 func search(args []string, out, errOut io.Writer) int {
 	var query []string
@@ -168,12 +168,15 @@ func search(args []string, out, errOut io.Writer) int {
 		return fail(errOut, err)
 	}
 	defer db.Close()
+	warnSecretsOverride(errOut)
 	stats, err := indexer.Refresh(db, cleaner)
 	if err != nil {
 		return fail(errOut, err)
 	}
-	warnSecretsOverride(errOut)
 	printStats(errOut, stats)
+	if code := statsCode(stats); code != 0 {
+		return code
+	}
 	hits, err := store.SearchOptsQuery(db, store.SearchOpts{
 		Query:     strings.Join(query, " "),
 		Source:    sourceFilter,
@@ -233,6 +236,14 @@ func show(id string, out, errOut io.Writer) int {
 		return 1
 	}
 	fmt.Fprint(out, transcript.Format(s, 200000))
+	return 0
+}
+func statsCode(s indexer.Stats) int {
+	for _, warning := range s.Warnings {
+		if strings.HasPrefix(warning, "redaction failed") {
+			return 1
+		}
+	}
 	return 0
 }
 func warnSecretsOverride(w io.Writer) {

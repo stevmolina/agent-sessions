@@ -85,6 +85,6 @@ Older T3 desktop installs stored threads in Chromium IndexedDB under `~/Library/
 
 ## Index schema
 
-Schema version 3 stores a locator in `sessions.path` (the native file path, or `t3code://<environment-id>/<thread-id>`), plus `origin_path`, `provider`, and related metadata. Opening a version 2 index migrates it in place and keeps FTS rows. Unknown versions are refused; the file is not deleted.
+Schema version 4 stores a locator in `sessions.path` (the native file path, or `t3code://<environment-id>/<thread-id>`), plus `origin_path`, `provider`, and related metadata. Opening a version 2 or 3 index migrates it in place and keeps FTS rows. Unknown versions are refused; the file is not deleted. Version 4 exists so an older binary will not open a redacted index and write raw text back into it.
 
 Python was removed. This Go CLI is the only supported implementation.

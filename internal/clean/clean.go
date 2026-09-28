@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -228,25 +229,33 @@ func usable(v string) bool {
 	case "true", "false", "yes", "no", "null", "none", "on", "off":
 		return false
 	}
-	if allDigits(v) && len(v) < 8 {
+	if allLetters(v) && len(v) < 16 {
 		return false
 	}
-	if allLetters(v) && len(v) < 16 {
+	// Short low-entropy values are usually regions, hosts, and bucket names.
+	// Longer values still match, so a passphrase is not skipped for looking familiar.
+	if len(v) < 16 && shannon(v) < 3.5 {
 		return false
 	}
 	return true
 }
 
-func allDigits(v string) bool {
-	if v == "" {
-		return false
+func shannon(s string) float64 {
+	n := 0
+	counts := map[rune]int{}
+	for _, r := range s {
+		counts[r]++
+		n++
 	}
-	for _, r := range v {
-		if !unicode.IsDigit(r) {
-			return false
-		}
+	if n == 0 {
+		return 0
 	}
-	return true
+	var h float64
+	for _, c := range counts {
+		p := float64(c) / float64(n)
+		h -= p * math.Log2(p)
+	}
+	return h
 }
 
 func allLetters(v string) bool {

@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Runner executes a Doppler CLI invocation and returns stdout only.
@@ -52,6 +53,8 @@ func Load(ctx context.Context) (*Cleaner, error) {
 	if err != nil {
 		return nil, errors.New("doppler secrets unavailable")
 	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
 	return LoadFrom(ctx, execRunner{bin: bin})
 }
 
@@ -73,7 +76,12 @@ func loadFile(path string) (*Cleaner, error) {
 	if err := json.Unmarshal(b, &m); err != nil {
 		return nil, errors.New("secrets file unavailable")
 	}
-	return New(m)
+	c, err := New(m)
+	if err != nil {
+		return nil, err
+	}
+	c.fp = "v1-override:" + strings.TrimPrefix(c.fp, "v1:")
+	return c, nil
 }
 
 type secretPayload struct {
@@ -159,6 +167,9 @@ func fetchSecrets(ctx context.Context, r Runner) (map[string]string, error) {
 				return nil, err
 			}
 		}
+	}
+	if len(out) == 0 {
+		return nil, errors.New("doppler returned no usable secrets")
 	}
 	return out, nil
 }

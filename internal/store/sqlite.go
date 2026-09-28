@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,7 +14,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = "3"
+// SchemaVersion 4 is the redacted index. Version 3 has the same tables, but an
+// older binary only accepts 3 and will refuse 4 instead of writing raw text
+// over a cleaned index.
+const SchemaVersion = "4"
 
 const schema = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -57,12 +61,19 @@ func Open(path string) (*sql.DB, error) {
 		db.Close()
 		return nil, err
 	}
-	if version != "" && version != "2" && version != SchemaVersion {
+	if version != "" && version != "2" && version != "3" && version != SchemaVersion {
 		db.Close()
 		return nil, fmt.Errorf("unsupported sessions schema version %q; remove the index and rebuild it", version)
 	}
 	if version == "2" {
 		if err := migrateV2toV3(db); err != nil {
+			db.Close()
+			return nil, err
+		}
+		version = "3"
+	}
+	if version == "3" {
+		if _, err = db.Exec("UPDATE meta SET value=? WHERE key='schema_version'", SchemaVersion); err != nil {
 			db.Close()
 			return nil, err
 		}
@@ -88,7 +99,7 @@ func Open(path string) (*sql.DB, error) {
 func Meta(db *sql.DB, key string) (string, error) {
 	var value string
 	err := db.QueryRow("SELECT value FROM meta WHERE key=?", key).Scan(&value)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
 	return value, err
@@ -136,7 +147,7 @@ func migrateV2toV3(db *sql.DB) error {
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_sessions_provider_session ON sessions(provider, provider_session_id)`); err != nil {
 		return err
 	}
-	if _, err := db.Exec(`UPDATE meta SET value=? WHERE key='schema_version'`, SchemaVersion); err != nil {
+	if _, err := db.Exec(`UPDATE meta SET value='3' WHERE key='schema_version'`); err != nil {
 		return err
 	}
 	return nil

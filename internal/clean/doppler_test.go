@@ -61,6 +61,42 @@ func TestLoadFromKeepsDistinctValuesAndDropsTrivialOnes(t *testing.T) {
 	}
 }
 
+func TestEmptyDopplerSetIsAnError(t *testing.T) {
+	runner := &fakeRunner{out: map[string][]byte{
+		strings.Join([]string{"projects", "--json"}, "\x00"):                                                                            []byte(`[{"name":"alpha"}]`),
+		strings.Join([]string{"configs", "--project", "alpha", "--json"}, "\x00"):                                                       []byte(`[{"name":"dev"}]`),
+		strings.Join([]string{"secrets", "download", "--project", "alpha", "--config", "dev", "--no-file", "--format", "json"}, "\x00"): []byte(`{"PORT":"8080","DOPPLER_CONFIG":"dev"}`),
+	}}
+	_, err := LoadFrom(context.Background(), runner)
+	if err == nil {
+		t.Fatal("expected empty doppler set to fail")
+	}
+	if strings.Contains(err.Error(), "8080") {
+		t.Fatal("error included a secret value")
+	}
+}
+
+func TestSecretsFileMarksFingerprint(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "secrets.json")
+	if err := os.WriteFile(path, []byte(`{"WIDGET":"sesame-door-91-quartz"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := loadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(c.Fingerprint(), "v1-override:") {
+		t.Fatal("override fingerprint was not marked")
+	}
+	plain, err := New(map[string]string{"WIDGET": "sesame-door-91-quartz"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.HasPrefix(plain.Fingerprint(), "v1-override:") {
+		t.Fatal("doppler fingerprint was marked as an override")
+	}
+}
+
 func TestExecRunnerHidesStderr(t *testing.T) {
 	secret := "hidden-" + mixed(24)
 	dir := t.TempDir()

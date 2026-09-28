@@ -76,6 +76,16 @@ func TestRedactRemovesKnownSecretShapes(t *testing.T) {
 	}
 }
 
+func TestRedactKeepsLowEntropyConfig(t *testing.T) {
+	got, err := Redact("deploy to us-east-1 tonight", map[string]string{"AWS_REGION": "us-east-1"})
+	if err != nil {
+		t.Fatal("redaction failed")
+	}
+	if !strings.Contains(got, "us-east-1") {
+		t.Fatal("region was redacted")
+	}
+}
+
 func TestFingerprintIgnoresOrderAndTracksValues(t *testing.T) {
 	a, err := New(map[string]string{"B": "sesame-door-91-quartz", "A": "other-token-91-quartz"})
 	if err != nil {

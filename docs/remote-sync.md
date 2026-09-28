@@ -18,10 +18,12 @@ Measured on this Mac on 2026-09-28: 1,006 sessions, 14.0 MB of body text, averag
 2. **Clean.** `internal/clean`, called from `Refresh` before `store.Upsert`.
    - Exact values come from Doppler at run time and stay in memory. Each hit becomes `[REDACTED:NAME]`.
    - Pattern hits use the gitleaks rules linked in as a Go library (`github.com/zricethezav/gitleaks/v8`). Those become `[REDACTED:RULE]`.
-   - Values shorter than 8 bytes are skipped. So are `true`, `false`, `yes`, `no`, `null`, `none`, `on`, `off`, all-digit values under 8 bytes, and letter-only values under 16 bytes. `DOPPLER_*` names are skipped.
+   - Values shorter than 8 bytes are skipped. So are `true`, `false`, `yes`, `no`, `null`, `none`, `on`, `off`, letter-only values under 16 bytes, and other values under 16 bytes whose Shannon entropy is below 3.5 (regions, short hostnames). `DOPPLER_*` names are skipped.
    - Every project and config the logged-in Doppler CLI can read is included. A full read on this Mac took about 7 seconds. If the same name has different values, the placeholder is `PROJECT/NAME`, then `PROJECT/CONFIG/NAME`.
    - If cleaning a session fails, that session is not written. An older row for it is deleted. The raw file is not modified.
-   - `meta.clean_fingerprint` is a hash of the secret set plus the gitleaks rule file. A change reindexes every session. The hash is not reversible.
+   - `meta.clean_fingerprint` is a hash of the secret set plus the gitleaks rule file. A change reindexes every session. The hash is not reversible. A Doppler read that yields no usable values is an error. `SESSIONS_SECRETS_JSON` writes the prefix `v1-override:` so that index is not mistaken for a Doppler clean later.
+   - Paths, cwd, branch, and model are not redacted. `show` needs the real path. Exact matching does not catch percent-encoded or re-wrapped copies of a value. Gitleaks still runs on the text it can see.
+   - The index schema is version 4. An older binary refuses it, so it cannot write raw turns over cleaned ones.
 3. **Verify.** `internal/clean/clean_test.go` builds fake keys at run time and checks that none of them survive. Before any upload, `gitleaks dir ~/.cache/sessions --redact --max-target-megabytes 200` must report 0 findings. A one-time canary and a weekly trufflehog scan of exported rows come later and do not block the first upload.
 4. **Upload.** Not built yet. `sessions push` will refresh, then upsert by source and id, and record which machine sent the row. A 15 minute timer (launchd on macOS, a systemd user timer on Fedora) will be installed through chezmoi after it works. `uname -s` tells the machines apart. Paths go through `$(brew --prefix)`.
 5. **Store.** Not created yet. Neon Postgres, one row per session, metadata plus the cleaned turns, `tsvector` with a GIN index. No raw JSONL. The connection string lives in Doppler, not in the repo or a `.env`.
