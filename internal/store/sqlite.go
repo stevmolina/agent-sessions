@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -84,6 +85,10 @@ func Open(path string) (*sql.DB, error) {
 		return nil, err
 	}
 	if err := ensureV3Columns(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := ensureTurnsColumn(db); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -186,6 +191,21 @@ func ensureV3Columns(db *sql.DB) error {
 	return nil
 }
 
+func ensureTurnsColumn(db *sql.DB) error {
+	cols, err := sessionColumns(db)
+	if err != nil {
+		if strings.Contains(err.Error(), "no such table") {
+			return nil
+		}
+		return err
+	}
+	if len(cols) == 0 || cols["turns"] {
+		return nil
+	}
+	_, err = db.Exec(`ALTER TABLE sessions ADD COLUMN turns TEXT NOT NULL DEFAULT '[]'`)
+	return err
+}
+
 func sessionColumns(db *sql.DB) (map[string]bool, error) {
 	rows, err := db.Query(`PRAGMA table_info(sessions)`)
 	if err != nil {
@@ -254,8 +274,16 @@ func Upsert(tx *sql.Tx, s *model.Session) error {
 	if s.Archived {
 		archived = 1
 	}
-	_, err := tx.Exec(`INSERT INTO sessions(path,id,source,provider,provider_instance_id,provider_session_id,project_id,origin_path,record_id,cwd,model,branch,worktree_path,archived,started_at,updated_at,mtime,size,revision,title,parent_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET id=excluded.id,source=excluded.source,provider=excluded.provider,provider_instance_id=excluded.provider_instance_id,provider_session_id=excluded.provider_session_id,project_id=excluded.project_id,origin_path=excluded.origin_path,record_id=excluded.record_id,cwd=excluded.cwd,model=excluded.model,branch=excluded.branch,worktree_path=excluded.worktree_path,archived=excluded.archived,started_at=excluded.started_at,updated_at=excluded.updated_at,mtime=excluded.mtime,size=excluded.size,revision=excluded.revision,title=excluded.title,parent_id=excluded.parent_id`,
-		s.Path, s.ID, s.Source, provider, s.ProviderInstanceID, s.ProviderSessionID, nullEmpty(s.ProjectID), origin, record, s.CWD, s.Model, s.Branch, s.WorktreePath, archived, s.StartedAt, s.UpdatedAt, s.MTime, s.Size, s.Revision, s.Title, s.ParentID)
+	payload := s.Turns
+	if payload == nil {
+		payload = []model.Turn{}
+	}
+	turns, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(`INSERT INTO sessions(path,id,source,provider,provider_instance_id,provider_session_id,project_id,origin_path,record_id,cwd,model,branch,worktree_path,archived,started_at,updated_at,mtime,size,revision,title,parent_id,turns) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET id=excluded.id,source=excluded.source,provider=excluded.provider,provider_instance_id=excluded.provider_instance_id,provider_session_id=excluded.provider_session_id,project_id=excluded.project_id,origin_path=excluded.origin_path,record_id=excluded.record_id,cwd=excluded.cwd,model=excluded.model,branch=excluded.branch,worktree_path=excluded.worktree_path,archived=excluded.archived,started_at=excluded.started_at,updated_at=excluded.updated_at,mtime=excluded.mtime,size=excluded.size,revision=excluded.revision,title=excluded.title,parent_id=excluded.parent_id,turns=excluded.turns`,
+		s.Path, s.ID, s.Source, provider, s.ProviderInstanceID, s.ProviderSessionID, nullEmpty(s.ProjectID), origin, record, s.CWD, s.Model, s.Branch, s.WorktreePath, archived, s.StartedAt, s.UpdatedAt, s.MTime, s.Size, s.Revision, s.Title, s.ParentID, string(turns))
 	if err != nil {
 		return err
 	}
@@ -264,6 +292,50 @@ func Upsert(tx *sql.Tx, s *model.Session) error {
 	}
 	_, err = tx.Exec("INSERT INTO sessions_fts(path,body,title) VALUES(?,?,?)", s.Path, s.Body, s.Title)
 	return err
+}
+
+type ExportRow struct {
+	ID, Source, Provider, Path, OriginPath, Title, Revision, Body string
+	ProviderSessionID, CWD, StartedAt, UpdatedAt                  *string
+	Turns                                                         []model.Turn
+}
+
+func List(db *sql.DB) ([]ExportRow, error) {
+	rows, err := db.Query(`SELECT s.id, s.source, s.provider, s.provider_session_id, s.cwd, s.title, s.path, s.origin_path, s.revision, s.started_at, s.updated_at, s.turns, f.body FROM sessions s JOIN sessions_fts f ON f.path = s.path ORDER BY s.source, s.id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ExportRow
+	for rows.Next() {
+		var row ExportRow
+		var turns sql.NullString
+		var providerSession, cwd, title, origin, revision, started, updated sql.NullString
+		if err := rows.Scan(&row.ID, &row.Source, &row.Provider, &providerSession, &cwd, &title, &row.Path, &origin, &revision, &started, &updated, &turns, &row.Body); err != nil {
+			return nil, err
+		}
+		row.ProviderSessionID = nullString(providerSession)
+		row.CWD = nullString(cwd)
+		row.Title = title.String
+		row.OriginPath = origin.String
+		row.Revision = revision.String
+		row.StartedAt = nullString(started)
+		row.UpdatedAt = nullString(updated)
+		if turns.Valid && turns.String != "" {
+			if err := json.Unmarshal([]byte(turns.String), &row.Turns); err != nil {
+				return nil, err
+			}
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func nullString(v sql.NullString) *string {
+	if !v.Valid || v.String == "" {
+		return nil
+	}
+	return &v.String
 }
 
 func Delete(tx *sql.Tx, path string) error {

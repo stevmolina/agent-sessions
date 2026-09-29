@@ -3,32 +3,37 @@ package cli
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/usuario/sessions/internal/clean"
 	"github.com/usuario/sessions/internal/config"
 	"github.com/usuario/sessions/internal/indexer"
+	"github.com/usuario/sessions/internal/remote"
 	"github.com/usuario/sessions/internal/source"
 	"github.com/usuario/sessions/internal/store"
 	"github.com/usuario/sessions/internal/transcript"
 )
 
-const help = `usage: sessions [-h] {index,search,show} ...
+const help = `usage: sessions [-h] {index,search,show,push} ...
 
 Search Cursor, Claude Code, Codex, and T3 Code transcripts in place.
 
 index and search redact secrets before writing the local index. Transcript
-files on disk are not modified. show prints the raw file.
+files on disk are not modified. show prints the raw file. push uploads the
+cleaned index. search --remote and show --remote read that upload.
 
 positional arguments:
-  {index,search,show}
+  {index,search,show,push}
     index              Walk transcript roots and refresh the SQLite index.
     search             Reindex stale sources, then FTS search.
     show               Print human turns for a session id or locator.
+    push               Refresh, then upsert cleaned sessions to Postgres.
 
 options:
   -h, --help           show this help message and exit
@@ -43,6 +48,10 @@ search options:
   --cwd PATH           Restrict to this working directory or a subdirectory.
   --limit N            Max results (default 20), applied after duplicate collapse.
   --all-copies         Keep exact T3/native duplicates instead of collapsing.
+  --remote             Query the Postgres copy instead of the local index.
+
+show options:
+  --remote             Print cleaned turns stored in Postgres.
 
 source is the entry point. provider is the agent. A T3 thread run by Codex is
 source=t3code provider=codex. Default search collapses exact T3/native twins
@@ -67,19 +76,18 @@ func Main(args []string, out, errOut io.Writer) int {
 	case "search":
 		return search(args[1:], out, errOut)
 	case "show":
-		if len(args) < 2 {
-			return usage(errOut, "the following arguments are required: id")
+		return show(args[1:], out, errOut)
+	case "push":
+		if len(args) > 1 {
+			return usage(errOut, "unrecognized arguments: "+strings.Join(args[1:], " "))
 		}
-		if len(args) > 2 {
-			return usage(errOut, "unrecognized arguments: "+strings.Join(args[2:], " "))
-		}
-		return show(args[1], out, errOut)
+		return push(out, errOut)
 	default:
-		return usage(errOut, "argument command: invalid choice: '"+args[0]+"' (choose from 'index', 'search', 'show')")
+		return usage(errOut, "argument command: invalid choice: '"+args[0]+"' (choose from 'index', 'search', 'show', 'push')")
 	}
 }
 func usage(w io.Writer, msg string) int {
-	fmt.Fprintln(w, "usage: sessions [-h] {index,search,show} ...")
+	fmt.Fprintln(w, "usage: sessions [-h] {index,search,show,push} ...")
 	fmt.Fprintln(w, "sessions: error: "+msg)
 	return 2
 }
@@ -114,6 +122,7 @@ func search(args []string, out, errOut io.Writer) int {
 	sourceFilter, provider, cwd := "", "", ""
 	limit := 20
 	allCopies := false
+	remoteSearch := false
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--source":
@@ -153,6 +162,8 @@ func search(args []string, out, errOut io.Writer) int {
 			}
 		case "--all-copies":
 			allCopies = true
+		case "--remote":
+			remoteSearch = true
 		default:
 			if strings.HasPrefix(args[i], "--") {
 				return usage(errOut, "unrecognized arguments: "+args[i])
@@ -162,6 +173,9 @@ func search(args []string, out, errOut io.Writer) int {
 	}
 	if len(query) == 0 {
 		return usage(errOut, "the following arguments are required: query")
+	}
+	if remoteSearch {
+		return searchRemote(strings.Join(query, " "), sourceFilter, provider, cwd, limit, out, errOut)
 	}
 	db, cleaner, err := openIndex()
 	if err != nil {
@@ -209,7 +223,29 @@ func search(args []string, out, errOut io.Writer) int {
 	}
 	return 0
 }
-func show(id string, out, errOut io.Writer) int {
+func show(args []string, out, errOut io.Writer) int {
+	remoteShow := false
+	var id string
+	for _, arg := range args {
+		switch arg {
+		case "--remote":
+			remoteShow = true
+		default:
+			if strings.HasPrefix(arg, "--") || id != "" {
+				return usage(errOut, "unrecognized arguments: "+arg)
+			}
+			id = arg
+		}
+	}
+	if id == "" {
+		return usage(errOut, "the following arguments are required: id")
+	}
+	if remoteShow {
+		return showRemote(id, out, errOut)
+	}
+	return showLocal(id, out, errOut)
+}
+func showLocal(id string, out, errOut io.Writer) int {
 	db, err := store.Open(config.IndexPath())
 	if err != nil {
 		return fail(errOut, err)
@@ -237,6 +273,130 @@ func show(id string, out, errOut io.Writer) int {
 	}
 	fmt.Fprint(out, transcript.Format(s, 200000))
 	return 0
+}
+func searchRemote(query, sourceFilter, provider, cwd string, limit int, out, errOut io.Writer) int {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	hits, err := remote.Search(ctx, query, sourceFilter, provider, cwd, limit)
+	if err != nil {
+		return fail(errOut, err)
+	}
+	if len(hits) == 0 {
+		fmt.Fprintln(out, "no matches")
+		return 0
+	}
+	for _, h := range hits {
+		date := value(h.StartedAt)
+		if date == "" {
+			date = value(h.UpdatedAt)
+		}
+		fmt.Fprintf(out, "%s\t%s\t%s\t%s\n", h.ID, h.Source, date, value(h.CWD))
+		if h.Source != h.Provider && h.Provider != "" {
+			fmt.Fprintln(out, "  provider: "+h.Provider)
+		}
+		if h.Title != "" {
+			fmt.Fprintln(out, "  title: "+h.Title)
+		}
+		fmt.Fprintln(out, "  snippet: "+strings.Join(strings.Fields(h.Snippet), " "))
+		fmt.Fprintln(out, "  path: "+h.Path)
+	}
+	return 0
+}
+func showRemote(id string, out, errOut io.Writer) int {
+	src := ""
+	lookup := id
+	if a, b, ok := strings.Cut(id, ":"); ok && source.ValidSource(a) {
+		src = a
+		lookup = b
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	rows, err := remote.Show(ctx, src, lookup)
+	if err != nil {
+		return fail(errOut, err)
+	}
+	if len(rows) == 0 {
+		fmt.Fprintln(errOut, "not found: "+id)
+		return 1
+	}
+	if len(rows) > 1 {
+		fmt.Fprintf(errOut, "multiple sessions match %s; use source:id or the path locator\n", id)
+		for _, r := range rows {
+			fmt.Fprintf(errOut, "%s:%s\t%s\n", r.Source, r.ID, r.Path)
+		}
+		return 1
+	}
+	fmt.Fprint(out, transcript.Format(&rows[0], 200000))
+	return 0
+}
+
+type textCleaner interface {
+	Text(string) (string, error)
+}
+
+func push(out, errOut io.Writer) int {
+	db, cleaner, err := openIndex()
+	if err != nil {
+		return fail(errOut, err)
+	}
+	defer db.Close()
+	warnSecretsOverride(errOut)
+	stats, err := indexer.Refresh(db, cleaner)
+	if err != nil {
+		return fail(errOut, err)
+	}
+	printStats(errOut, stats)
+	fingerprint, err := store.Meta(db, "clean_fingerprint")
+	if err != nil {
+		return fail(errOut, err)
+	}
+	if err := remote.CheckFingerprint(fingerprint); err != nil {
+		return fail(errOut, err)
+	}
+	checker, ok := cleaner.(textCleaner)
+	if !ok {
+		return fail(errOut, errors.New("redaction unavailable"))
+	}
+	rows, err := store.List(db)
+	if err != nil {
+		return fail(errOut, err)
+	}
+	cleanRows := make([]store.ExportRow, 0, len(rows))
+	verifyFailed := 0
+	for _, row := range rows {
+		if !rowStillClean(checker, row) {
+			verifyFailed++
+			fmt.Fprintln(errOut, "redaction failed, skipped "+row.Path)
+			continue
+		}
+		cleanRows = append(cleanRows, row)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	uploaded, err := remote.Push(ctx, cleanRows, fingerprint, "", stats.Failed == 0 && verifyFailed == 0)
+	if err != nil {
+		return fail(errOut, err)
+	}
+	fmt.Fprintf(errOut, "%d uploaded, %d unchanged, %d deleted, %d failed\n", uploaded.Uploaded, uploaded.Unchanged, uploaded.Deleted, uploaded.Failed+verifyFailed+stats.Failed)
+	if verifyFailed > 0 || stats.Failed > 0 {
+		return 1
+	}
+	return 0
+}
+func rowStillClean(checker textCleaner, row store.ExportRow) bool {
+	if !stillClean(checker, row.Title) || !stillClean(checker, row.Body) {
+		return false
+	}
+	for _, turn := range row.Turns {
+		if !stillClean(checker, turn.Text) {
+			return false
+		}
+	}
+	return true
+}
+func stillClean(checker textCleaner, text string) bool {
+	got, err := checker.Text(text)
+	return err == nil && got == text
 }
 func statsCode(s indexer.Stats) int {
 	for _, warning := range s.Warnings {
