@@ -1,6 +1,9 @@
 package model
 
-type Turn struct{ Role, Text string }
+type Turn struct {
+	Role string `json:"role"`
+	Text string `json:"text"`
+}
 
 type Session struct {
 	ID, Source, Provider, Path, Title, Body string

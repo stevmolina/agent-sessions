@@ -41,6 +41,13 @@ func refresh(db *sql.DB, cleaner Cleaner, adapters []source.SourceAdapter) (Stat
 	if err != nil {
 		return stats, err
 	}
+	locators := make([]string, 0, len(existing))
+	for path := range existing {
+		locators = append(locators, path)
+	}
+	if err := source.CheckSnapshot(locators); err != nil {
+		return Stats{Failed: 1, Warnings: []string{"redaction failed: incomplete source snapshot"}}, nil
+	}
 	tx, err := db.Begin()
 	if err != nil {
 		return stats, err
@@ -56,8 +63,8 @@ func refresh(db *sql.DB, cleaner Cleaner, adapters []source.SourceAdapter) (Stat
 		candidates, err := adapter.Discover()
 		if err != nil {
 			stats.Failed++
-			stats.Warnings = append(stats.Warnings, err.Error())
-			continue
+			stats.Warnings = append(stats.Warnings, "redaction failed: incomplete source snapshot")
+			return stats, err
 		}
 		for _, item := range candidates {
 			seen[item.Locator] = true

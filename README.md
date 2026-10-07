@@ -18,11 +18,14 @@ go build -o sessions ./cmd/sessions
 sessions index
 sessions search "query"
 sessions show SOURCE:ID
+sessions push
+sessions search "query" --remote
+sessions show SOURCE:ID --remote
 ```
 
-`search` refreshes stale sources first. You do not need `index` unless you want a refresh without searching.
+`search` refreshes stale sources first. You do not need `index` unless you want a refresh without searching. `search --remote` and `show --remote` read the Postgres copy and do not refresh.
 
-`index` and `search` redact secrets into the local index before storing text. Transcript files are left unchanged, and `show` still prints the raw file. See [docs/remote-sync.md](docs/remote-sync.md).
+`index` and `search` redact secrets into the local index before storing text. Transcript files are left unchanged, and local `show` still prints the raw file. `push` uploads the cleaned index. See [docs/remote-sync.md](docs/remote-sync.md).
 
 ## Source vs provider
 
