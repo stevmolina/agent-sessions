@@ -10,6 +10,7 @@ import (
 
 	"github.com/usuario/sessions/internal/clean"
 	"github.com/usuario/sessions/internal/model"
+	"github.com/usuario/sessions/internal/source"
 	"github.com/usuario/sessions/internal/store"
 )
 
@@ -150,4 +151,111 @@ func openFixture(t *testing.T, text string) (*sql.DB, string) {
 		t.Fatal(err)
 	}
 	return db, path
+}
+
+type failingLoadAdapter struct{ candidates []source.Candidate }
+
+func (a failingLoadAdapter) Discover() ([]source.Candidate, error) { return a.candidates, nil }
+func (a failingLoadAdapter) Load(source.Candidate) (*model.Session, error) {
+	return nil, errors.New("unreadable transcript")
+}
+func TestRefreshRemovesPreviousTextWhenLoadFails(t *testing.T) {
+	db, path := openFixture(t, "previous searchable text")
+	defer db.Close()
+	if _, err := Refresh(db, &stubCleaner{fp: "old"}); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := (source.JSONL{}).Discover()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stats, err := refresh(db, &stubCleaner{fp: "new"}, []source.SourceAdapter{failingLoadAdapter{candidates}})
+	if err != nil || stats.Failed != 1 || len(stats.Warnings) != 1 || !strings.HasPrefix(stats.Warnings[0], "redaction failed") {
+		t.Fatalf("stats=%+v err=%v", stats, err)
+	}
+	var count int
+	if err := db.QueryRow("SELECT count(*) FROM sessions_fts").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatal("previous text survived failed load")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal("raw transcript was removed")
+	}
+	stats, err = Refresh(db, &stubCleaner{fp: "new"})
+	if err != nil || stats.Upserted != 1 {
+		t.Fatalf("retry stats=%+v err=%v", stats, err)
+	}
+}
+
+func TestRefreshRetainsRowsWhenPreviouslyIndexedRootDisappears(t *testing.T) {
+	db, path := openFixture(t, "keep remote copy")
+	defer db.Close()
+	if _, err := Refresh(db, &stubCleaner{fp: "old"}); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Dir(filepath.Dir(path))
+	if err := os.Rename(root, root+"-offline"); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := Refresh(db, &stubCleaner{fp: "new"})
+	if err != nil || stats.Failed != 1 {
+		t.Fatalf("stats=%+v err=%v", stats, err)
+	}
+	var count int
+	if err := db.QueryRow("SELECT count(*) FROM sessions").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatal("unavailable root removed indexed rows")
+	}
+	fp, err := store.Meta(db, "clean_fingerprint")
+	if err != nil || fp != "old" {
+		t.Fatalf("fingerprint=%q err=%v", fp, err)
+	}
+}
+func TestRefreshAllowsCompleteEmptySnapshot(t *testing.T) {
+	db, path := openFixture(t, "remove deliberately")
+	defer db.Close()
+	if _, err := Refresh(db, &stubCleaner{fp: "policy"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := Refresh(db, &stubCleaner{fp: "policy"})
+	if err != nil || stats.Failed != 0 || stats.Deleted != 1 {
+		t.Fatalf("stats=%+v err=%v", stats, err)
+	}
+}
+
+func TestRefreshRetainsPreviousT3Environment(t *testing.T) {
+	db, _ := openFixture(t, "ordinary transcript")
+	defer db.Close()
+	envA := filepath.Join(t.TempDir(), "a")
+	envB := filepath.Join(t.TempDir(), "b")
+	thread := []source.T3ThreadFixture{{ID: "thread", Title: "first environment", Provider: "codex", Messages: []source.T3MessageFixture{{Role: "user", Text: "retain this T3 chat"}}}}
+	if _, err := source.WriteT3Fixture(envA, "env-a", thread); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.WriteT3Fixture(envB, "env-b", nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SESSIONS_T3_ROOT", envA)
+	if _, err := Refresh(db, &stubCleaner{fp: "policy"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SESSIONS_T3_ROOT", envB)
+	stats, err := Refresh(db, &stubCleaner{fp: "policy"})
+	if err != nil || stats.Failed != 1 {
+		t.Fatalf("stats=%+v err=%v", stats, err)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT count(*) FROM sessions WHERE path='t3code://env-a/thread'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatal("changing T3 environment removed the previous chat")
+	}
 }

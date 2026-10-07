@@ -2,13 +2,14 @@
 # Install the 15 minute push timer for this machine.
 # Uses $(brew --prefix) and $HOME. Does not embed a database URL.
 set -eu
-prefix="$(brew --prefix)"
-home="${HOME}"
-bin="${home}/.local/bin/sessions"
-path="${home}/.local/bin:${prefix}/bin:/usr/bin:/bin"
+sessions_home="${HOME}"
+bin="${sessions_home}/.local/bin/sessions"
+path="${sessions_home}/.local/bin:/usr/local/bin:/usr/bin:/bin"
 case "$(uname -s)" in
 Darwin)
-  dir="${home}/Library/LaunchAgents"
+  prefix="$(brew --prefix)"
+  path="${sessions_home}/.local/bin:${prefix}/bin:/usr/bin:/bin"
+  dir="${sessions_home}/Library/LaunchAgents"
   mkdir -p "${dir}"
   plist="${dir}/com.stevmolina.sessions-push.plist"
   cat > "${plist}" <<EOF
@@ -39,7 +40,7 @@ EOF
   launchctl bootstrap "gui/$(id -u)" "${plist}"
   ;;
 Linux)
-  dir="${XDG_CONFIG_HOME:-${home}/.config}/systemd/user"
+  dir="${XDG_CONFIG_HOME:-${sessions_home}/.config}/systemd/user"
   mkdir -p "${dir}"
   cat > "${dir}/sessions-push.service" <<EOF
 [Unit]
