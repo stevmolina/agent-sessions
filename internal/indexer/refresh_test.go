@@ -229,3 +229,33 @@ func TestRefreshAllowsCompleteEmptySnapshot(t *testing.T) {
 		t.Fatalf("stats=%+v err=%v", stats, err)
 	}
 }
+
+func TestRefreshRetainsPreviousT3Environment(t *testing.T) {
+	db, _ := openFixture(t, "ordinary transcript")
+	defer db.Close()
+	envA := filepath.Join(t.TempDir(), "a")
+	envB := filepath.Join(t.TempDir(), "b")
+	thread := []source.T3ThreadFixture{{ID: "thread", Title: "first environment", Provider: "codex", Messages: []source.T3MessageFixture{{Role: "user", Text: "retain this T3 chat"}}}}
+	if _, err := source.WriteT3Fixture(envA, "env-a", thread); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.WriteT3Fixture(envB, "env-b", nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SESSIONS_T3_ROOT", envA)
+	if _, err := Refresh(db, &stubCleaner{fp: "policy"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SESSIONS_T3_ROOT", envB)
+	stats, err := Refresh(db, &stubCleaner{fp: "policy"})
+	if err != nil || stats.Failed != 1 {
+		t.Fatalf("stats=%+v err=%v", stats, err)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT count(*) FROM sessions WHERE path='t3code://env-a/thread'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatal("changing T3 environment removed the previous chat")
+	}
+}

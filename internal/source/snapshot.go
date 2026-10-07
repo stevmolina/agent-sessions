@@ -15,9 +15,13 @@ func CheckSnapshot(locators []string) error {
 	roots := []string{config.CursorRoot(), config.ClaudeRoot(), config.CodexRoot(), config.CodexArchiveRoot()}
 	for _, locator := range locators {
 		if strings.HasPrefix(locator, "t3code://") {
-			db, _, err := t3DB()
+			db, envID, err := t3DB()
 			if err != nil || db == "" {
 				return errors.New("previously indexed T3 database unavailable")
+			}
+			previousEnv, _, ok := strings.Cut(strings.TrimPrefix(locator, "t3code://"), "/")
+			if !ok || previousEnv != envID {
+				return errors.New("previously indexed T3 environment is no longer configured")
 			}
 			continue
 		}
