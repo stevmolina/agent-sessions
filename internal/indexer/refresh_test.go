@@ -188,3 +188,44 @@ func TestRefreshRemovesPreviousTextWhenLoadFails(t *testing.T) {
 		t.Fatalf("retry stats=%+v err=%v", stats, err)
 	}
 }
+
+func TestRefreshRetainsRowsWhenPreviouslyIndexedRootDisappears(t *testing.T) {
+	db, path := openFixture(t, "keep remote copy")
+	defer db.Close()
+	if _, err := Refresh(db, &stubCleaner{fp: "old"}); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Dir(filepath.Dir(path))
+	if err := os.Rename(root, root+"-offline"); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := Refresh(db, &stubCleaner{fp: "new"})
+	if err != nil || stats.Failed != 1 {
+		t.Fatalf("stats=%+v err=%v", stats, err)
+	}
+	var count int
+	if err := db.QueryRow("SELECT count(*) FROM sessions").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatal("unavailable root removed indexed rows")
+	}
+	fp, err := store.Meta(db, "clean_fingerprint")
+	if err != nil || fp != "old" {
+		t.Fatalf("fingerprint=%q err=%v", fp, err)
+	}
+}
+func TestRefreshAllowsCompleteEmptySnapshot(t *testing.T) {
+	db, path := openFixture(t, "remove deliberately")
+	defer db.Close()
+	if _, err := Refresh(db, &stubCleaner{fp: "policy"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := Refresh(db, &stubCleaner{fp: "policy"})
+	if err != nil || stats.Failed != 0 || stats.Deleted != 1 {
+		t.Fatalf("stats=%+v err=%v", stats, err)
+	}
+}
