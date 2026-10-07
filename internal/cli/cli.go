@@ -14,6 +14,7 @@ import (
 	"github.com/usuario/sessions/internal/clean"
 	"github.com/usuario/sessions/internal/config"
 	"github.com/usuario/sessions/internal/indexer"
+	"github.com/usuario/sessions/internal/model"
 	"github.com/usuario/sessions/internal/remote"
 	"github.com/usuario/sessions/internal/source"
 	"github.com/usuario/sessions/internal/store"
@@ -303,15 +304,14 @@ func searchRemote(query, sourceFilter, provider, cwd string, limit int, out, err
 	return 0
 }
 func showRemote(id string, out, errOut io.Writer) int {
-	src := ""
-	lookup := id
-	if a, b, ok := strings.Cut(id, ":"); ok && source.ValidSource(a) {
-		src = a
-		lookup = b
-	}
+	return showRemoteWithLookup(id, out, errOut, remote.Show)
+}
+
+func showRemoteWithLookup(id string, out, errOut io.Writer, lookupFn func(context.Context, string, string) ([]model.Session, error)) int {
+	src, lookup := remote.ParseLocator(id)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	rows, err := remote.Show(ctx, src, lookup)
+	rows, err := lookupFn(ctx, src, lookup)
 	if err != nil {
 		return fail(errOut, err)
 	}
