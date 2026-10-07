@@ -30,14 +30,14 @@ const upsertSQL = `INSERT INTO sessions (
   turns = EXCLUDED.turns,
   pushed_at = now()`
 
-const remoteStateSQL = `SELECT source, id, revision, clean_fingerprint FROM sessions WHERE machine = $1`
-
-const deleteSQL = `DELETE FROM sessions AS s
-WHERE s.machine = $1
-  AND NOT EXISTS (
-    SELECT 1 FROM unnest($2::text[], $3::text[]) AS k(source, id)
-    WHERE k.source = s.source AND k.id = s.id
-  )`
+const remoteStateSQL = `SELECT s.source, s.id,
+ CASE WHEN s.turns = '[]'::jsonb THEN NULL ELSE s.revision END,
+ s.clean_fingerprint,
+ EXISTS (SELECT 1 FROM session_machines m WHERE m.source=s.source AND m.id=s.id AND m.machine=$1)
+ FROM sessions s`
+const addOwnershipSQL = `INSERT INTO session_machines(source,id,machine) VALUES($1,$2,$3) ON CONFLICT DO NOTHING`
+const removeOwnershipSQL = `DELETE FROM session_machines WHERE machine=$1 AND source=$2 AND id=$3`
+const deleteOrphanSQL = `DELETE FROM sessions AS s WHERE s.source=$1 AND s.id=$2 AND NOT EXISTS (SELECT 1 FROM session_machines m WHERE m.source=s.source AND m.id=s.id)`
 
 // Push upserts cleaned rows for this machine and deletes rows this machine no longer has.
 // allowDelete stays false when a local clean pass failed, so a transient failure cannot
@@ -58,9 +58,30 @@ func Push(ctx context.Context, rows []store.ExportRow, fingerprint, machine stri
 		return Stats{}, err
 	}
 	defer db.Close(ctx)
-	if err := migrate(ctx, db); err != nil {
+
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return Stats{}, sqlError("begin", err)
+	}
+	defer tx.Rollback(ctx)
+	// Serialize snapshot ownership changes, including migration and orphan removal.
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(1979716451)`); err != nil {
+		return Stats{}, sqlError("lock", err)
+	}
+	if err := migrate(ctx, tx); err != nil {
 		return Stats{}, err
 	}
+	stats, err := syncRows(ctx, tx, rows, fingerprint, machine, allowDelete)
+	if err != nil {
+		return stats, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return stats, sqlError("commit", err)
+	}
+	return stats, nil
+}
+
+func syncRows(ctx context.Context, db conn, rows []store.ExportRow, fingerprint, machine string, allowDelete bool) (Stats, error) {
 	remoteRows, err := loadRemote(ctx, db, machine)
 	if err != nil {
 		return Stats{}, err
@@ -72,7 +93,14 @@ func Push(ctx context.Context, rows []store.ExportRow, fingerprint, machine stri
 		local = append(local, item)
 		byKey[key(item)] = row
 	}
-	decision := planSync(local, remoteRows, allowDelete && len(rows) > 0)
+	decision := planSync(local, remoteRows, false)
+	owned := make([]Row, 0)
+	for _, row := range remoteRows {
+		if row.Owned {
+			owned = append(owned, row)
+		}
+	}
+	removals := planSync(local, owned, allowDelete).remove
 	var stats Stats
 	stats.Unchanged = len(rows) - len(decision.upsert)
 	for _, item := range decision.upsert {
@@ -82,12 +110,22 @@ func Push(ctx context.Context, rows []store.ExportRow, fingerprint, machine stri
 		}
 		stats.Uploaded++
 	}
-	if len(decision.remove) > 0 {
-		n, err := deleteMissing(ctx, db, machine, local)
-		if err != nil {
-			return stats, err
+
+	// An unchanged shared chat still belongs to this machine.
+	for _, item := range local {
+		if _, err := db.Exec(ctx, addOwnershipSQL, item.Source, item.ID, machine); err != nil {
+			return stats, sqlError("ownership", err)
 		}
-		stats.Deleted = n
+	}
+	for _, item := range removals {
+		if _, err := db.Exec(ctx, removeOwnershipSQL, machine, item.Source, item.ID); err != nil {
+			return stats, sqlError("ownership", err)
+		}
+		tag, err := db.Exec(ctx, deleteOrphanSQL, item.Source, item.ID)
+		if err != nil {
+			return stats, sqlError("delete", err)
+		}
+		stats.Deleted += int(tag.RowsAffected())
 	}
 	return stats, nil
 }
@@ -102,7 +140,7 @@ func loadRemote(ctx context.Context, db conn, machine string) ([]Row, error) {
 	for rows.Next() {
 		var row Row
 		var revision, fingerprint *string
-		if err := rows.Scan(&row.Source, &row.ID, &revision, &fingerprint); err != nil {
+		if err := rows.Scan(&row.Source, &row.ID, &revision, &fingerprint, &row.Owned); err != nil {
 			return nil, sqlError("read", err)
 		}
 		if revision != nil {
@@ -132,18 +170,4 @@ func upsert(ctx context.Context, db conn, row store.ExportRow, machine, fingerpr
 		return sqlError("upsert", err)
 	}
 	return nil
-}
-
-func deleteMissing(ctx context.Context, db conn, machine string, local []Row) (int, error) {
-	sources := make([]string, len(local))
-	ids := make([]string, len(local))
-	for i, row := range local {
-		sources[i] = row.Source
-		ids[i] = row.ID
-	}
-	tag, err := db.Exec(ctx, deleteSQL, machine, sources, ids)
-	if err != nil {
-		return 0, sqlError("delete", err)
-	}
-	return int(tag.RowsAffected()), nil
 }

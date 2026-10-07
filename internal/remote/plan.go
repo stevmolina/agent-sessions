@@ -5,6 +5,7 @@ import "errors"
 // Row is one cleaned session ready to upload.
 type Row struct {
 	Source, ID, Revision, Fingerprint string
+	Owned                             bool
 }
 
 // CheckFingerprint refuses an index that was not cleaned with Doppler.
