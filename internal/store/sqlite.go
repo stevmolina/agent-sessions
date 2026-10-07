@@ -202,8 +202,18 @@ func ensureTurnsColumn(db *sql.DB) error {
 	if len(cols) == 0 || cols["turns"] {
 		return nil
 	}
-	_, err = db.Exec(`ALTER TABLE sessions ADD COLUMN turns TEXT NOT NULL DEFAULT '[]'`)
-	return err
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`ALTER TABLE sessions ADD COLUMN turns TEXT NOT NULL DEFAULT '[]'`); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`DELETE FROM meta WHERE key='clean_fingerprint'`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func sessionColumns(db *sql.DB) (map[string]bool, error) {
