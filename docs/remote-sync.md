@@ -60,7 +60,7 @@ WorkOS issues tokens. The server checks AuthKit's authorization server metadata 
 Before connecting a client, enable Client ID Metadata Document support in WorkOS Connect configuration. Enable Dynamic Client Registration as well if an older MCP client needs it. Add the public MCP resource URL as a Resource Indicator. See the [AuthKit MCP setup](https://workos.com/docs/authkit/mcp) for client registration details. In claude.ai, add a custom connector using that URL and sign in. Claude Code can connect with:
 
 ```bash
-claude mcp add --transport http sessions https://sessions.stevmolina.com/mcp
+claude mcp add --transport http sessions https://sessions.mcpbox.dev/mcp
 ```
 
 Authenticate through `/mcp` in Claude Code, then run one `search` and one `show`. The Claude phone app can use the connector added to the same claude.ai account.
