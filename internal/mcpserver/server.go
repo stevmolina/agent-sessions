@@ -288,20 +288,32 @@ func Run() error {
 		return err
 	}
 	server := &http.Server{Addr: net.JoinHostPort(host, port), Handler: handler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 45 * time.Second, IdleTimeout: 60 * time.Second}
-	done := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			shutdownCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
-			defer stop()
-			server.Shutdown(shutdownCtx)
-		case <-done:
+
+	return serveUntilCanceled(ctx, server, server.ListenAndServe, 10*time.Second)
+}
+
+// serveUntilCanceled waits for active handlers to drain before returning to the
+// CLI, whose main function exits the process immediately after Run returns.
+func serveUntilCanceled(ctx context.Context, server *http.Server, serve func() error, grace time.Duration) error {
+	served := make(chan error, 1)
+	go func() { served <- serve() }()
+	select {
+	case err := <-served:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
 		}
-	}()
-	err = server.ListenAndServe()
-	close(done)
-	if errors.Is(err, http.ErrServerClosed) {
-		return nil
+		return err
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), grace)
+		defer cancel()
+		shutdownErr := server.Shutdown(shutdownCtx)
+		if shutdownErr != nil {
+			_ = server.Close()
+		}
+		serveErr := <-served
+		if errors.Is(serveErr, http.ErrServerClosed) {
+			serveErr = nil
+		}
+		return errors.Join(serveErr, shutdownErr)
 	}
-	return err
 }
