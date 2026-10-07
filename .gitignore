@@ -1,2 +1,4 @@
 *.sqlite
 .cache/
+.env
+.env.*

@@ -21,11 +21,14 @@ sessions show SOURCE:ID
 sessions push
 sessions search "query" --remote
 sessions show SOURCE:ID --remote
+sessions mcp
 ```
 
 `search` refreshes stale sources first. You do not need `index` unless you want a refresh without searching. `search --remote` and `show --remote` read the Postgres copy and do not refresh.
 
 `index` and `search` redact secrets into the local index before storing text. Transcript files are left unchanged, and local `show` still prints the raw file. `push` uploads the cleaned index. See [docs/remote-sync.md](docs/remote-sync.md).
+
+`mcp` serves the cleaned Postgres copy over streamable HTTP for Claude connectors. Its `search` and `show` tools use the same remote queries as the CLI. WorkOS AuthKit handles login, and the server accepts only the configured user's tokens. See the [access setup](docs/remote-sync.md#access) for environment variables and connection instructions.
 
 ## Source vs provider
 

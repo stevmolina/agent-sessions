@@ -27,8 +27,42 @@ Measured on this Mac on 2026-09-28: 1,006 sessions, 14.0 MB of body text, averag
 3. **Verify.** `internal/clean/clean_test.go` builds fake keys at run time and checks that none of them survive. Before any upload, `gitleaks dir ~/.cache/sessions --redact --max-target-megabytes 200` must report 0 findings. A one-time canary and a weekly trufflehog scan of exported rows come later and do not block the first upload.
 4. **Upload.** `sessions push` refreshes, checks each stored title and body still redacts to itself, then upserts by source and id. The row records `os.Hostname()`. A clean failure skips that session and does not delete the cloud copy. Missing previously indexed roots and discovery errors prevent deletion. A complete empty snapshot releases that machine's remote ownership. Shared source/id rows have separate machine ownership records and disappear only after the last machine releases them. `SESSIONS_SECRETS_JSON` (`v1-override:`) is refused. `deploy/install-timer.sh` installs a 15 minute timer: launchd on macOS, a systemd user timer on Linux. It uses `uname -s` and `$HOME/.local/bin/sessions`; only macOS requires `brew --prefix`.
 5. **Store.** Neon project `sessions` (`falling-field-30105744`), database `neondb`, table `sessions`. Schema is `internal/remote/schema.sql`: metadata, cleaned body, turns as jsonb, a generated `search` tsvector, and a GIN index. No raw JSONL. `DATABASE_URL` (owner) and `DATABASE_URL_READONLY` live in Doppler project `sessions`, configs `dev` and `prd`. `doppler.yaml` names that project. Nothing in the repo is a connection string.
-6. **Access.** `sessions search --remote` and `sessions show --remote` use the read-only URL and do not refresh. Role `sessions_reader` has `SELECT` only. `push` uses the owner URL and applies the schema.
+6. **Access.** `sessions search --remote` and `sessions show --remote` use the read-only URL and do not refresh. SQL-created role `sessions_mcp_reader` has `SELECT` only. `push` uses the owner URL and applies the schema.
 
 `SESSIONS_SECRETS_JSON` points at a JSON object and replaces the Doppler fetch. `index` and `search` print a warning when it is set. Tests set it. Leave it unset for a real index.
 
 If Doppler cannot be read, `index` and `search` stop before writing. The previous index is left as it is. Local `show` does not contact Doppler. `search --remote` and `show --remote` need `DATABASE_URL_READONLY` and do not read Doppler secrets for redaction.
+
+## Access
+
+`sessions mcp` serves two read-only tools over streamable HTTP at `/mcp`:
+
+- `search`: `query`, optional `source`, `provider`, `all_copies`, and `limit`. The default limit is 20. Like the CLI's remote search, it returns stored copies without local duplicate collapse, so `all_copies` does not change remote results.
+- `show`: `id`, accepting a session ID, `source:id`, or a path locator. Ambiguous IDs require a source or locator. The response contains cleaned turns, with the same output limit as `show --remote`.
+
+The server uses only `DATABASE_URL_READONLY`. It requires that URL in its environment and does not fetch Doppler secrets, refresh an index, apply the schema, or upload transcripts. The deployed application receives only the read-only DB URL and auth configuration.
+
+Create the reader through SQL, then grant schema usage and table SELECT. [Neon Console, CLI, and API roles inherit `neon_superuser`](https://neon.com/docs/manage/roles), which can permit writes despite an explicit SELECT-only table grant. Verify effective write privileges before deploying. The read-only URL uses the restricted SQL role in both Doppler configs and Dokploy.
+
+Required environment variables, names only:
+
+| Variable | Purpose |
+|---|---|
+| `DATABASE_URL_READONLY` | Postgres URL for the SELECT-only role |
+| `AUTHKIT_ISSUER` | WorkOS AuthKit authorization server issuer |
+| `WORKOS_ALLOWED_USER_ID` | The only WorkOS subject permitted to use the tools |
+| `MCP_RESOURCE_URL` | Public HTTPS URL of the `/mcp` resource |
+
+Optional `PORT` defaults to `8080`, and `BIND_HOST` defaults to `0.0.0.0`. Store auth configuration in Doppler project `sessions`, configs `dev` and `prd`, and mirror the runtime values into Dokploy. Do not supply `DATABASE_URL` or a WorkOS API key to the deployed server.
+
+WorkOS issues tokens. The server checks AuthKit's authorization server metadata issuer, the JWT signature against its JWKS, and the token's issuer, resource audience, expiration, and allowed subject. Token failures return 401 with an `invalid_token` bearer challenge and a link to `/.well-known/oauth-protected-resource`. That public metadata points clients at AuthKit. `/healthz` is public liveness only and never queries Neon, allowing the database to autosuspend.
+
+Before connecting a client, enable Client ID Metadata Document support in WorkOS Connect configuration. Enable Dynamic Client Registration as well if an older MCP client needs it. Add the public MCP resource URL as a Resource Indicator. See the [AuthKit MCP setup](https://workos.com/docs/authkit/mcp) for client registration details. In claude.ai, add a custom connector using that URL and sign in. Claude Code can connect with:
+
+```bash
+claude mcp add --transport http sessions https://sessions.stevmolina.com/mcp
+```
+
+Authenticate through `/mcp` in Claude Code, then run one `search` and one `show`. The Claude phone app can use the connector added to the same claude.ai account.
+
+The Docker image runs `sessions mcp` as a non-root user. Deploy it with a 512 MiB memory cap. Its health check calls `/healthz` only. Keep secrets in Doppler and Dokploy, outside the image and repository.

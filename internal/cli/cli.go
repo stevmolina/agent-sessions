@@ -14,6 +14,7 @@ import (
 	"github.com/usuario/sessions/internal/clean"
 	"github.com/usuario/sessions/internal/config"
 	"github.com/usuario/sessions/internal/indexer"
+	"github.com/usuario/sessions/internal/mcpserver"
 	"github.com/usuario/sessions/internal/model"
 	"github.com/usuario/sessions/internal/remote"
 	"github.com/usuario/sessions/internal/source"
@@ -21,7 +22,7 @@ import (
 	"github.com/usuario/sessions/internal/transcript"
 )
 
-const help = `usage: sessions [-h] {index,search,show,push} ...
+const help = `usage: sessions [-h] {index,search,show,push,mcp} ...
 
 Search Cursor, Claude Code, Codex, and T3 Code transcripts in place.
 
@@ -30,11 +31,12 @@ files on disk are not modified. show prints the raw file. push uploads the
 cleaned index. search --remote and show --remote read that upload.
 
 positional arguments:
-  {index,search,show,push}
+  {index,search,show,push,mcp}
     index              Walk transcript roots and refresh the SQLite index.
     search             Reindex stale sources, then FTS search.
     show               Print human turns for a session id or locator.
     push               Refresh, then upsert cleaned sessions to Postgres.
+    mcp                Serve authenticated remote search over HTTP.
 
 options:
   -h, --help           show this help message and exit
@@ -78,17 +80,25 @@ func Main(args []string, out, errOut io.Writer) int {
 		return search(args[1:], out, errOut)
 	case "show":
 		return show(args[1:], out, errOut)
+	case "mcp":
+		if len(args) > 1 {
+			return usage(errOut, "unrecognized arguments: "+strings.Join(args[1:], " "))
+		}
+		if err := mcpserver.Run(); err != nil {
+			return fail(errOut, err)
+		}
+		return 0
 	case "push":
 		if len(args) > 1 {
 			return usage(errOut, "unrecognized arguments: "+strings.Join(args[1:], " "))
 		}
 		return push(out, errOut)
 	default:
-		return usage(errOut, "argument command: invalid choice: '"+args[0]+"' (choose from 'index', 'search', 'show', 'push')")
+		return usage(errOut, "argument command: invalid choice: '"+args[0]+"' (choose from 'index', 'search', 'show', 'push', 'mcp')")
 	}
 }
 func usage(w io.Writer, msg string) int {
-	fmt.Fprintln(w, "usage: sessions [-h] {index,search,show,push} ...")
+	fmt.Fprintln(w, "usage: sessions [-h] {index,search,show,push,mcp} ...")
 	fmt.Fprintln(w, "sessions: error: "+msg)
 	return 2
 }
