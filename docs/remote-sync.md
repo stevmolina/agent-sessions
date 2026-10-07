@@ -32,3 +32,35 @@ Measured on this Mac on 2026-09-28: 1,006 sessions, 14.0 MB of body text, averag
 `SESSIONS_SECRETS_JSON` points at a JSON object and replaces the Doppler fetch. `index` and `search` print a warning when it is set. Tests set it. Leave it unset for a real index.
 
 If Doppler cannot be read, `index` and `search` stop before writing. The previous index is left as it is. Local `show` does not contact Doppler. `search --remote` and `show --remote` need `DATABASE_URL_READONLY` and do not read Doppler secrets for redaction.
+
+## Access
+
+`sessions mcp` serves two read-only tools over streamable HTTP at `/mcp`:
+
+- `search`: `query`, optional `source`, `provider`, `all_copies`, and `limit`. The default limit is 20. Like the CLI's remote search, it returns stored copies without local duplicate collapse, so `all_copies` does not change remote results.
+- `show`: `id`, accepting a session ID, `source:id`, or a path locator. Ambiguous IDs require a source or locator. The response contains cleaned turns, with the same output limit as `show --remote`.
+
+The server uses only `DATABASE_URL_READONLY`. It requires that URL in its environment and does not fetch Doppler secrets, refresh an index, apply the schema, or upload transcripts. The deployed application receives only the read-only DB URL and auth configuration.
+
+Required environment variables, names only:
+
+| Variable | Purpose |
+|---|---|
+| `DATABASE_URL_READONLY` | Postgres URL for the SELECT-only role |
+| `AUTHKIT_ISSUER` | WorkOS AuthKit authorization server issuer |
+| `WORKOS_ALLOWED_USER_ID` | The only WorkOS subject permitted to use the tools |
+| `MCP_RESOURCE_URL` | Public HTTPS URL of the `/mcp` resource |
+
+Optional `PORT` defaults to `8080`, and `BIND_HOST` defaults to `0.0.0.0`. Store auth configuration in Doppler project `sessions`, configs `dev` and `prd`, and mirror the runtime values into Dokploy. Do not supply `DATABASE_URL` or a WorkOS API key to the deployed server.
+
+WorkOS issues tokens. The server checks AuthKit's authorization server metadata issuer, the JWT signature against its JWKS, and the token's issuer, resource audience, expiration, and allowed subject. Token failures return 401 with an `invalid_token` bearer challenge and a link to `/.well-known/oauth-protected-resource`. That public metadata points clients at AuthKit. `/healthz` is public liveness only and never queries Neon, allowing the database to autosuspend.
+
+Before connecting a client, add the public MCP resource URL as a Resource Indicator in WorkOS Connect configuration. In claude.ai, add a custom connector using that URL and sign in. Claude Code can connect with:
+
+```bash
+claude mcp add --transport http sessions https://sessions.stevmolina.com/mcp
+```
+
+Authenticate through `/mcp` in Claude Code, then run one `search` and one `show`. The Claude phone app can use the connector added to the same claude.ai account.
+
+The Docker image runs `sessions mcp` as a non-root user. Deploy it with a 512 MiB memory cap. Its health check calls `/healthz` only. Keep secrets in Doppler and Dokploy, outside the image and repository.
