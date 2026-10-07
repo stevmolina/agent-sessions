@@ -1,7 +1,6 @@
 package mcpserver
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -274,9 +273,13 @@ func TestHTTPTools(t *testing.T) {
 }
 func TestRequestBodyLimit(t *testing.T) {
 	f := newFixture(t, "")
-	resp := f.request(t, "/mcp", f.token(t, f.claims, f.key), string(bytes.Repeat([]byte(" "), (1<<20)+1)))
-	if resp.StatusCode < 400 {
-		t.Fatalf("oversized body accepted: %d", resp.StatusCode)
+	body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "search", "arguments": map[string]any{"query": strings.Repeat("x", 1<<20)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := f.request(t, "/mcp", f.token(t, f.claims, f.key), string(body))
+	if resp.StatusCode != http.StatusRequestEntityTooLarge || f.backend.called {
+		t.Fatalf("oversized body status %d, backend called %v", resp.StatusCode, f.backend.called)
 	}
 }
 func TestConfigValidation(t *testing.T) {
