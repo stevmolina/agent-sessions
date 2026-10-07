@@ -23,6 +23,10 @@ type Stats struct {
 }
 
 func Refresh(db *sql.DB, cleaner Cleaner) (Stats, error) {
+	return refresh(db, cleaner, source.Adapters())
+}
+
+func refresh(db *sql.DB, cleaner Cleaner, adapters []source.SourceAdapter) (Stats, error) {
 	var stats Stats
 	if cleaner == nil || cleaner.Fingerprint() == "" {
 		return stats, errors.New("redaction unavailable")
@@ -48,7 +52,7 @@ func Refresh(db *sql.DB, cleaner Cleaner) (Stats, error) {
 		}
 	}()
 	seen := map[string]bool{}
-	for _, adapter := range source.Adapters() {
+	for _, adapter := range adapters {
 		candidates, err := adapter.Discover()
 		if err != nil {
 			stats.Failed++
@@ -65,6 +69,12 @@ func Refresh(db *sql.DB, cleaner Cleaner) (Stats, error) {
 			s, err := adapter.Load(item)
 			if err != nil {
 				stats.Failed++
+				stats.Warnings = append(stats.Warnings, "redaction failed, skipped "+item.Locator)
+				if exists {
+					if err := store.Delete(tx, item.Locator); err != nil {
+						return stats, err
+					}
+				}
 				continue
 			}
 			if err := applyClean(cleaner, s); err != nil {

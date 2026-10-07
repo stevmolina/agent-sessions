@@ -10,6 +10,7 @@ import (
 
 	"github.com/usuario/sessions/internal/clean"
 	"github.com/usuario/sessions/internal/model"
+	"github.com/usuario/sessions/internal/source"
 	"github.com/usuario/sessions/internal/store"
 )
 
@@ -150,4 +151,40 @@ func openFixture(t *testing.T, text string) (*sql.DB, string) {
 		t.Fatal(err)
 	}
 	return db, path
+}
+
+type failingLoadAdapter struct{ candidates []source.Candidate }
+
+func (a failingLoadAdapter) Discover() ([]source.Candidate, error) { return a.candidates, nil }
+func (a failingLoadAdapter) Load(source.Candidate) (*model.Session, error) {
+	return nil, errors.New("unreadable transcript")
+}
+func TestRefreshRemovesPreviousTextWhenLoadFails(t *testing.T) {
+	db, path := openFixture(t, "previous searchable text")
+	defer db.Close()
+	if _, err := Refresh(db, &stubCleaner{fp: "old"}); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := (source.JSONL{}).Discover()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stats, err := refresh(db, &stubCleaner{fp: "new"}, []source.SourceAdapter{failingLoadAdapter{candidates}})
+	if err != nil || stats.Failed != 1 || len(stats.Warnings) != 1 || !strings.HasPrefix(stats.Warnings[0], "redaction failed") {
+		t.Fatalf("stats=%+v err=%v", stats, err)
+	}
+	var count int
+	if err := db.QueryRow("SELECT count(*) FROM sessions_fts").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatal("previous text survived failed load")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal("raw transcript was removed")
+	}
+	stats, err = Refresh(db, &stubCleaner{fp: "new"})
+	if err != nil || stats.Upserted != 1 {
+		t.Fatalf("retry stats=%+v err=%v", stats, err)
+	}
 }
