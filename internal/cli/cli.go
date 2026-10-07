@@ -313,12 +313,7 @@ func searchRemote(query, sourceFilter, provider, cwd string, limit int, out, err
 	return 0
 }
 func showRemote(id string, out, errOut io.Writer) int {
-	src := ""
-	lookup := id
-	if a, b, ok := strings.Cut(id, ":"); ok && source.ValidSource(a) {
-		src = a
-		lookup = b
-	}
+	src, lookup := remote.ParseLocator(id)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	rows, err := remote.Show(ctx, src, lookup)

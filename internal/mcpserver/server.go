@@ -241,10 +241,7 @@ func addTools(server *mcp.Server, b Backend) {
 		if strings.TrimSpace(in.ID) == "" {
 			return nil, nil, errors.New("id is required")
 		}
-		src, id := "", in.ID
-		if a, b, ok := strings.Cut(id, ":"); ok && source.ValidSource(a) {
-			src, id = a, b
-		}
+		src, id := remote.ParseLocator(in.ID)
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 		rows, err := b.Show(ctx, src, id)

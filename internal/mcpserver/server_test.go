@@ -253,6 +253,10 @@ func TestHTTPTools(t *testing.T) {
 	if f.backend.src != "t3code" || f.backend.id != "session" || !strings.Contains(toolText(reply), "cleaned human text") {
 		t.Fatalf("reply %v", reply)
 	}
+	reply = f.call(t, "show", map[string]any{"id": "t3code://environment/session"})
+	if f.backend.src != "" || f.backend.id != "t3code://environment/session" || !strings.Contains(toolText(reply), "cleaned human text") {
+		t.Fatalf("path locator changed: %v", reply)
+	}
 	f.backend.rows = append(f.backend.rows, model.Session{ID: "session", Source: "codex"})
 	reply = f.call(t, "show", map[string]any{"id": "session"})
 	if !strings.Contains(toolText(reply), "multiple sessions match") || reply["result"].(map[string]any)["isError"] != true {
