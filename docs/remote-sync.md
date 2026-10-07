@@ -27,7 +27,7 @@ Measured on this Mac on 2026-09-28: 1,006 sessions, 14.0 MB of body text, averag
 3. **Verify.** `internal/clean/clean_test.go` builds fake keys at run time and checks that none of them survive. Before any upload, `gitleaks dir ~/.cache/sessions --redact --max-target-megabytes 200` must report 0 findings. A one-time canary and a weekly trufflehog scan of exported rows come later and do not block the first upload.
 4. **Upload.** `sessions push` refreshes, checks each stored title and body still redacts to itself, then upserts by source and id. The row records `os.Hostname()`. A clean failure skips that session and does not delete the cloud copy. `SESSIONS_SECRETS_JSON` (`v1-override:`) is refused. `deploy/install-timer.sh` installs a 15 minute timer: launchd on macOS, a systemd user timer on Linux. It uses `uname -s`, `$(brew --prefix)`, and `$HOME/.local/bin/sessions`.
 5. **Store.** Neon project `sessions` (`falling-field-30105744`), database `neondb`, table `sessions`. Schema is `internal/remote/schema.sql`: metadata, cleaned body, turns as jsonb, a generated `search` tsvector, and a GIN index. No raw JSONL. `DATABASE_URL` (owner) and `DATABASE_URL_READONLY` live in Doppler project `sessions`, configs `dev` and `prd`. `doppler.yaml` names that project. Nothing in the repo is a connection string.
-6. **Access.** `sessions search --remote` and `sessions show --remote` use the read-only URL and do not refresh. Role `sessions_reader` has `SELECT` only. `push` uses the owner URL and applies the schema.
+6. **Access.** `sessions search --remote` and `sessions show --remote` use the read-only URL and do not refresh. SQL-created role `sessions_mcp_reader` has `SELECT` only. `push` uses the owner URL and applies the schema.
 
 `SESSIONS_SECRETS_JSON` points at a JSON object and replaces the Doppler fetch. `index` and `search` print a warning when it is set. Tests set it. Leave it unset for a real index.
 
@@ -41,6 +41,8 @@ If Doppler cannot be read, `index` and `search` stop before writing. The previou
 - `show`: `id`, accepting a session ID, `source:id`, or a path locator. Ambiguous IDs require a source or locator. The response contains cleaned turns, with the same output limit as `show --remote`.
 
 The server uses only `DATABASE_URL_READONLY`. It requires that URL in its environment and does not fetch Doppler secrets, refresh an index, apply the schema, or upload transcripts. The deployed application receives only the read-only DB URL and auth configuration.
+
+Create the reader through SQL, then grant schema usage and table SELECT. [Neon Console, CLI, and API roles inherit `neon_superuser`](https://neon.com/docs/manage/roles), which can permit writes despite an explicit SELECT-only table grant. Verify effective write privileges before deploying. The read-only URL uses the restricted SQL role in both Doppler configs and Dokploy.
 
 Required environment variables, names only:
 
