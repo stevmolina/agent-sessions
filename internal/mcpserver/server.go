@@ -89,6 +89,8 @@ func NewHandler(ctx context.Context, c Config, backend Backend) (http.Handler, e
 	mux.Handle("/.well-known/oauth-protected-resource", metadata)
 	mux.Handle("/.well-known/oauth-protected-resource/mcp", metadata)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK); fmt.Fprintln(w, "ok") })
+	// Exact public paths. GET also serves HEAD. /mcp, OAuth metadata, and /healthz stay on their handlers.
+	registerPublic(mux)
 	return http.MaxBytesHandler(mux, 1<<20), nil
 }
 
