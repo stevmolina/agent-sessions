@@ -286,6 +286,93 @@ func TestRequestBodyLimit(t *testing.T) {
 		t.Fatalf("oversized body status %d, backend called %v", resp.StatusCode, f.backend.called)
 	}
 }
+func TestLandingPage(t *testing.T) {
+	f := newFixture(t, "")
+	resp := f.request(t, "/", "", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "text/html; charset=utf-8" {
+		t.Fatalf("content-type %q", ct)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(body)
+	for _, want := range []string{
+		"<title>Agent Sessions — Switch AIs. Keep the conversation.</title>",
+		`name="description" content="Agent Sessions keeps your AI history when you switch tools. Start in ChatGPT, continue in Claude or Cursor, and never explain the thread twice."`,
+		`rel="canonical" href="https://sessions.mcpbox.dev/"`,
+		`property="og:url" content="https://sessions.mcpbox.dev/"`,
+		`name="twitter:card" content="summary"`,
+		`href="#how"`,
+		`href="#use"`,
+		`href="#pricing"`,
+		`href="#guide"`,
+		"https://computer.mcpbox.dev",
+		"https://brain.mcpbox.dev",
+		">TBD<",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("missing %q", want)
+		}
+	}
+	if strings.Contains(html, "Gemini") {
+		t.Fatal("gemini sample card still present")
+	}
+
+	headReq, err := http.NewRequest(http.MethodHead, f.server.URL+"/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	headResp, err := http.DefaultClient.Do(headReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer headResp.Body.Close()
+	if headResp.StatusCode != http.StatusOK || headResp.Header.Get("Content-Type") != "text/html; charset=utf-8" {
+		t.Fatalf("HEAD status %d content-type %q", headResp.StatusCode, headResp.Header.Get("Content-Type"))
+	}
+	headBody, err := io.ReadAll(headResp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(headBody) != 0 {
+		t.Fatalf("HEAD body %q", headBody)
+	}
+
+	for _, path := range []string{"/robots.txt", "/sitemap.xml", "/llms.txt"} {
+		page := f.request(t, path, "", "")
+		if page.StatusCode != http.StatusOK {
+			t.Fatalf("%s status %d", path, page.StatusCode)
+		}
+		text, err := io.ReadAll(page.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(text), "https://sessions.mcpbox.dev/") {
+			t.Fatalf("%s missing canonical url: %s", path, text)
+		}
+	}
+
+	health := f.request(t, "/healthz", "", "")
+	healthBody, err := io.ReadAll(health.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if health.StatusCode != http.StatusOK || string(healthBody) != "ok\n" {
+		t.Fatalf("health %d %q", health.StatusCode, healthBody)
+	}
+	mcp := f.request(t, "/mcp", "", "")
+	if mcp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("mcp status %d", mcp.StatusCode)
+	}
+	missing := f.request(t, "/missing", "", "")
+	if missing.StatusCode != http.StatusNotFound {
+		t.Fatalf("missing status %d", missing.StatusCode)
+	}
+}
 func TestConfigValidation(t *testing.T) {
 	for _, c := range []Config{{}, {Issuer: "http://untrusted.test", AllowedUserID: "test", ResourceURL: "https://example.test/mcp"}, {Issuer: "https://issuer.test", AllowedUserID: "test", ResourceURL: "https://example.test/other"}} {
 		if _, err := NewHandler(context.Background(), c, &fakeBackend{}); err == nil {

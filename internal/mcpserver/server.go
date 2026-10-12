@@ -3,6 +3,7 @@ package mcpserver
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +29,25 @@ import (
 	"github.com/usuario/sessions/internal/source"
 	"github.com/usuario/sessions/internal/transcript"
 )
+
+//go:embed web/index.html
+var landingHTML []byte
+
+//go:embed web/robots.txt
+var robotsTXT []byte
+
+//go:embed web/sitemap.xml
+var sitemapXML []byte
+
+//go:embed web/llms.txt
+var llmsTXT []byte
+
+func staticPage(body []byte, contentType string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", contentType)
+		_, _ = w.Write(body)
+	}
+}
 
 type Config struct{ Issuer, AllowedUserID, ResourceURL string }
 
@@ -89,6 +109,11 @@ func NewHandler(ctx context.Context, c Config, backend Backend) (http.Handler, e
 	mux.Handle("/.well-known/oauth-protected-resource", metadata)
 	mux.Handle("/.well-known/oauth-protected-resource/mcp", metadata)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK); fmt.Fprintln(w, "ok") })
+	// Exact paths only. GET also accepts HEAD. /mcp, auth metadata, and /healthz stay on their own handlers.
+	mux.HandleFunc("GET /{$}", staticPage(landingHTML, "text/html; charset=utf-8"))
+	mux.HandleFunc("GET /robots.txt", staticPage(robotsTXT, "text/plain; charset=utf-8"))
+	mux.HandleFunc("GET /sitemap.xml", staticPage(sitemapXML, "application/xml; charset=utf-8"))
+	mux.HandleFunc("GET /llms.txt", staticPage(llmsTXT, "text/plain; charset=utf-8"))
 	return http.MaxBytesHandler(mux, 1<<20), nil
 }
 

@@ -1,0 +1,139 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Agent Sessions — Switch AIs. Keep the conversation.</title><meta name="description" content="Agent Sessions keeps your AI history when you switch tools. Start in ChatGPT, continue in Claude or Cursor, and never explain the thread twice."><link rel="canonical" href="https://sessions.mcpbox.dev/"><meta property="og:type" content="website"><meta property="og:site_name" content="Agent Sessions"><meta property="og:title" content="Agent Sessions — Switch AIs. Keep the conversation."><meta property="og:description" content="Agent Sessions keeps your AI history when you switch tools. Start in ChatGPT, continue in Claude or Cursor, and never explain the thread twice."><meta property="og:url" content="https://sessions.mcpbox.dev/"><meta name="twitter:card" content="summary"><meta name="twitter:title" content="Agent Sessions — Switch AIs. Keep the conversation."><meta name="twitter:description" content="Agent Sessions keeps your AI history when you switch tools. Start in ChatGPT, continue in Claude or Cursor, and never explain the thread twice."><link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet"><style>
+:root{--y:#FFDB5B;--y1:#FFF1C1;--y2:#FEE9A0;--g:#F3F3F3;--c:#3B3B3B}
+*{margin:0;box-sizing:border-box}body{width:1440px;font-family:'Plus Jakarta Sans',sans-serif;color:var(--c);background:#fff}
+h2{font-size:64px;font-weight:700;letter-spacing:-.03em;line-height:1.05}
+p{line-height:1.5}
+.btn{display:inline-block;background:#111;color:#fff;border-radius:99px;padding:18px 32px;font-weight:600;font-size:17px}
+.lnk{text-decoration:underline;text-underline-offset:4px;font-weight:500;color:inherit}
+.wrap{padding:110px 48px}
+.pillai{display:inline-block;border-radius:99px;padding:5px 12px;font-size:13px;font-weight:700}
+.gpt{background:#DDF3E4;color:#1d5b34}.cl{background:#F8E1D2;color:#7a3b14}.cu{background:#E2E6FF;color:#2c3796}.ge{background:#E0F0FF;color:#1b5591}
+header{position:absolute;top:0;left:0;right:0;height:96px;display:flex;justify-content:space-between;align-items:center;padding:0 44px;z-index:10}
+.wm{font-weight:800;font-size:30px;letter-spacing:-.04em}
+.nav{background:rgba(255,255,255,.75);backdrop-filter:blur(10px);border-radius:16px;padding:14px 12px;display:flex;gap:6px;font-weight:500;font-size:16px}
+.nav a{padding:0 18px;color:inherit;text-decoration:none}
+#hero{background:var(--y);position:relative;height:1000px;overflow:hidden}
+.big{position:absolute;left:0;right:0;top:120px;text-align:center;font-weight:800;font-size:196px;letter-spacing:-.06em;line-height:1;white-space:nowrap}
+.marq{position:absolute;top:330px;left:0;width:100%;overflow:hidden;height:370px}
+.tr{display:flex;gap:26px;width:max-content;animation:m 40s linear infinite}
+@keyframes m{to{transform:translateX(-50%)}}
+.pc{width:250px;height:310px;border-radius:20px;background:#fff;box-shadow:0 20px 40px rgba(80,60,0,.18);padding:18px;display:flex;flex-direction:column;justify-content:space-between;flex:none}
+.pc:nth-child(3n+1){transform:translateY(20px) rotate(-2deg)}.pc:nth-child(3n+2){transform:translateY(-6px) rotate(2deg)}
+.pc .bub{border-radius:14px;padding:10px 12px;font-size:13px;line-height:1.4;margin-top:8px}
+.pc .me{background:var(--g);margin-left:30px}.pc .ai{background:var(--y1)}
+.pc h4{font-size:19px;font-weight:700}.pc small{font-size:13px;color:#777}
+.hcopy{position:absolute;left:0;right:0;top:690px;text-align:center}
+.hcopy h1{font-size:72px;font-weight:800;letter-spacing:-.04em;line-height:1.02}
+.hcopy p{font-size:21px;width:640px;margin:18px auto 28px}
+/* handoff */
+.half{display:grid;grid-template-columns:1fr 120px 1fr;align-items:center;gap:0;margin-top:50px}
+.chat{border-radius:24px;padding:28px;min-height:420px;position:relative}
+.chat .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px;font-weight:700}
+.b{border-radius:18px;padding:14px 18px;font-size:16px;line-height:1.45;margin-bottom:14px;max-width:85%}
+.u{background:#fff;margin-left:auto}.a{background:rgba(255,255,255,.55)}
+.arrow{font-size:60px;text-align:center;font-weight:800}
+.stamp{position:absolute;width:150px;height:150px;border-radius:50%;background:#111;color:var(--y);display:grid;place-items:center;text-align:center;font-weight:800;font-size:14px;letter-spacing:.08em;text-transform:uppercase;line-height:1.3;border:4px dashed var(--y);outline:6px solid #111}
+.head2{display:grid;grid-template-columns:1fr 1fr;gap:40px;align-items:end}
+/* how */
+.cards3{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;margin-top:50px}
+.c3{border-radius:24px;padding:36px;min-height:380px;display:flex;flex-direction:column}
+.c3 .n{width:56px;height:56px;border-radius:50%;background:#111;color:var(--y);display:grid;place-items:center;font-weight:800;font-size:22px}
+.c3 h3{font-size:32px;font-weight:700;letter-spacing:-.02em;margin:auto 0 12px}.c3 p{font-size:17px}
+/* git */
+.gray{background:var(--g);border-radius:24px;padding:70px;position:relative;overflow:hidden}
+.tl{position:relative;height:340px;margin-top:40px}
+.vlab{position:absolute;writing-mode:vertical-rl;transform:rotate(180deg);background:#111;color:#fff;border-radius:99px;padding:16px 8px;font-weight:700;font-size:14px}
+.commit{position:absolute;background:#fff;border-radius:16px;padding:14px 18px;box-shadow:0 8px 20px rgba(0,0,0,.06);width:230px}
+.commit b{display:block;font-size:16px;margin:6px 0 2px}.commit small{color:#777;font-size:13px}
+.dot{position:absolute;width:24px;height:24px;border-radius:50%;border:5px solid #111;background:var(--y)}
+/* use */
+.use{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:50px;position:relative}
+.uc{border-radius:24px;padding:44px;min-height:520px;display:flex;flex-direction:column}
+.uc .vis{background:#fff;border-radius:18px;padding:22px;margin-bottom:34px;height:220px;position:relative}
+.uc h3{font-size:40px;font-weight:700;letter-spacing:-.02em;margin-bottom:12px}.uc p{font-size:18px;margin-bottom:24px}
+/* privacy */
+.priv{display:grid;grid-template-columns:1fr 1fr;gap:60px;align-items:center}
+.plist{display:grid;gap:14px}.plist div{background:var(--g);border-radius:20px;padding:24px 28px;font-size:20px;font-weight:600;display:flex;gap:16px;align-items:center}
+.plist i{font-style:normal;width:40px;height:40px;border-radius:50%;background:var(--y);display:grid;place-items:center}
+/* pricing */
+.plans{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:50px;width:1000px}
+.plan{border-radius:24px;padding:44px;border:2px solid #e5e5e5}
+.plan .p{font-size:72px;font-weight:800;letter-spacing:-.04em;margin:10px 0}
+.plan ul{list-style:none;padding:0;font-size:18px;line-height:2.1;margin:10px 0 30px}
+/* final */
+.final{background:var(--y);border-radius:24px;padding:70px;display:grid;grid-template-columns:1fr 1fr;gap:40px;align-items:center;overflow:hidden;position:relative;height:460px}
+.final h2{font-size:72px}
+footer{padding:20px 48px 60px;display:grid;grid-template-columns:1.3fr 1fr 1fr 1fr;gap:30px}
+footer .wm{font-size:80px;line-height:1}
+footer h5{font-size:14px;font-weight:500;color:#777;margin-bottom:16px}
+footer a{display:block;color:var(--c);text-decoration:none;font-size:18px;margin-bottom:12px}
+</style></head><body>
+<header><span class="wm">Agent Sessions</span><div class="nav"><a href="#how">How it works</a><a href="#use">Use cases</a><a href="#pricing">Pricing</a><a href="#guide">Guide</a></div><span class="btn" style="padding:14px 26px;font-size:16px">Get started</span></header>
+
+<section id="hero"><div class="big">Agent Sessions</div>
+<div class="marq"><div class="tr">
+<!--cards x2-->
+<div class="pc"><div><span class="pillai gpt">ChatGPT</span><div class="bub me">Pro at $15?</div><div class="bub ai">Team at $12/seat.</div></div><div><h4>Pricing plan</h4><small>42 msgs · ChatGPT</small></div></div><div class="pc"><div><span class="pillai cl">Claude</span><div class="bub me">Make it shorter</div><div class="bub ai">Done: 3 lines.</div></div><div><h4>Launch copy</h4><small>18 msgs · Claude</small></div></div><div class="pc"><div><span class="pillai cu">Cursor</span><div class="bub me">Add the table</div><div class="bub ai">Table added.</div></div><div><h4>Pricing page</h4><small>27 msgs · Cursor</small></div></div><div class="pc"><div><span class="pillai gpt">ChatGPT</span><div class="bub me">What's first?</div><div class="bub ai">Billing, then teams.</div></div><div><h4>Q4 roadmap</h4><small>58 msgs · ChatGPT</small></div></div><div class="pc"><div><span class="pillai cl">Claude</span><div class="bub me">Tighten para 2</div><div class="bub ai">Tightened.</div></div><div><h4>Investor update</h4><small>14 msgs · Claude</small></div></div>
+<div class="pc"><div><span class="pillai gpt">ChatGPT</span><div class="bub me">Pro at $15?</div><div class="bub ai">Team at $12/seat.</div></div><div><h4>Pricing plan</h4><small>42 msgs · ChatGPT</small></div></div><div class="pc"><div><span class="pillai cl">Claude</span><div class="bub me">Make it shorter</div><div class="bub ai">Done: 3 lines.</div></div><div><h4>Launch copy</h4><small>18 msgs · Claude</small></div></div><div class="pc"><div><span class="pillai cu">Cursor</span><div class="bub me">Add the table</div><div class="bub ai">Table added.</div></div><div><h4>Pricing page</h4><small>27 msgs · Cursor</small></div></div><div class="pc"><div><span class="pillai gpt">ChatGPT</span><div class="bub me">What's first?</div><div class="bub ai">Billing, then teams.</div></div><div><h4>Q4 roadmap</h4><small>58 msgs · ChatGPT</small></div></div><div class="pc"><div><span class="pillai cl">Claude</span><div class="bub me">Tighten para 2</div><div class="bub ai">Tightened.</div></div><div><h4>Investor update</h4><small>14 msgs · Claude</small></div></div>
+</div></div>
+<div class="hcopy"><h1>Switch AIs.<br>Keep the conversation.</h1><p>Your history follows you from ChatGPT to Claude to Cursor. No more explaining twice.</p><span class="btn">Get started — it's free</span></div>
+</section>
+
+<section id="handoff" class="wrap"><div class="head2"><h2>Start in one.<br>Finish in another.</h2><p style="font-size:20px">Close ChatGPT, open Claude. It already knows where you left off. <a class="lnk" href="#how">See how it works →</a></p></div>
+<div class="half">
+<div class="chat" style="background:#DDF3E4"><div class="top"><span class="pillai gpt" style="background:#fff">ChatGPT</span><small style="font-weight:500">Pricing plan · 42 msgs</small></div>
+<div class="b u">Let's do 3 tiers: Free, Pro and Team.</div><div class="b a">Good call. Pro at $15, Team at $12 per seat?</div><div class="b u">Yes. Annual gets 2 months free.</div><div class="b a">Saved. Next: the comparison table.</div></div>
+<div class="arrow">→</div>
+<div class="chat" style="background:#F8E1D2"><div class="top"><span class="pillai cl" style="background:#fff">Claude</span><small style="font-weight:500">just now</small></div>
+<div class="b a">Picking up from your ChatGPT session on pricing… 3 tiers, Team at $12/seat, annual = 2 months free.</div><div class="b u">Perfect. Write the comparison table.</div><div class="b a">Here it is, using the tiers you agreed on.</div>
+<div class="stamp" style="right:-40px;bottom:-50px">Continued<br>from<br>ChatGPT</div></div>
+</div></section>
+
+<section id="how" class="wrap" style="padding-top:40px"><h2 id="guide">How it works</h2>
+<div class="cards3">
+<div class="c3" style="background:var(--y1)"><span class="n">1</span><h3>Connect your AIs</h3><p>ChatGPT, Claude, Cursor. One click each.</p></div>
+<div class="c3" style="background:var(--y2)"><span class="n">2</span><h3>Keep chatting</h3><p>Talk like always. Sessions saves the thread.</p></div>
+<div class="c3" style="background:var(--y)"><span class="n">3</span><h3>Pick up anywhere</h3><p>Open any AI and continue. Nothing lost.</p></div>
+</div></section>
+
+<section id="git" class="wrap" style="padding-top:20px"><div class="gray">
+<div class="head2"><h2>Like git, for your<br>AI conversations.</h2><p style="font-size:20px">Every session is saved. Branch it, hand it off, come back to it.</p></div>
+<div class="tl">
+<svg style="position:absolute;left:0;top:0" width="1200" height="340"><path d="M60 110 H1180" stroke="#111" stroke-width="5"/><path d="M420 110 C500 110,500 250,580 250 H1000" stroke="#111" stroke-width="5" fill="none" stroke-dasharray="2 12" stroke-linecap="round"/></svg>
+<span class="vlab" style="left:-10px;top:50px">main</span>
+<div class="dot" style="left:148px;top:98px"></div><div class="commit" style="left:80px;top:150px;transform:rotate(-2deg)"><span class="pillai gpt">ChatGPT</span><b>Pricing plan</b><small>42 msgs · Mon</small></div>
+<div class="dot" style="left:408px;top:98px"></div><div class="commit" style="left:350px;top:-20px;transform:rotate(2deg)"><span class="pillai gpt">ChatGPT</span><b>Tier names</b><small>12 msgs · Tue</small></div>
+<div class="dot" style="left:568px;top:238px"></div><div class="commit" style="left:620px;top:200px;transform:rotate(-1deg)"><span class="pillai cl">Claude</span><b>Comparison table</b><small>continued · Wed</small></div>
+<div class="dot" style="left:908px;top:98px"></div><div class="commit" style="left:830px;top:-20px;transform:rotate(-2deg)"><span class="pillai cu">Cursor</span><b>Pricing page code</b><small>18 msgs · Thu</small></div>
+<span class="vlab" style="left:1060px;top:180px;background:var(--y);color:#111">branch</span>
+</div></div></section>
+
+<section id="use" class="wrap" style="padding-top:20px"><h2>Made for how you work</h2>
+<div class="use">
+<div class="uc" style="background:var(--y);padding-right:100px"><div class="vis"><div style="display:flex;gap:10px;flex-wrap:wrap"><span class="pillai gpt">ChatGPT</span>→<span class="pillai cl">Claude</span>→<span class="pillai cu">Cursor</span></div><p style="margin-top:18px;font-size:16px"><b>Launch copy</b> · 3 tools, 1 thread</p><p style="font-size:14px;color:#777">Started Mon · still going</p></div>
+<h3>Solo</h3><p>Use the best AI for each step. Switch freely, never start over.</p><span class="lnk">For makers →</span></div>
+<div class="uc" style="background:#FFEC8A;padding-left:100px"><div class="vis"><p style="font-size:16px"><b>Ana</b> shared <b>Q4 roadmap · 58 msgs</b></p><p style="margin-top:12px;font-size:16px"><b>Leo</b> picked it up in <span class="pillai cl">Claude</span></p><p style="font-size:14px;color:#777;margin-top:12px">no recap needed</p></div>
+<h3>Teams</h3><p>Hand a session to a teammate. They pick up exactly where you left off.</p><span class="lnk">For teams →</span></div>
+<div class="stamp" style="left:50%;top:100%;transform:translate(-50%,-55%) rotate(-10deg);width:170px;height:170px;font-size:16px">Never<br>explain<br>twice</div>
+</div></section>
+
+<section id="privacy" class="wrap" style="padding-top:20px"><div class="priv"><div><h2>Your history.<br>Your rules.</h2><p style="font-size:20px;margin:22px 0">Nothing is shared unless you say so. <a class="lnk" href="#privacy">Read our privacy promise →</a></p></div>
+<div class="plist"><div><i>✓</i>You choose what's shared</div><div><i>✓</i>It's yours, export anytime</div><div><i>✓</i>Delete anytime, for good</div></div></div></section>
+
+<section id="pricing" class="wrap" style="padding-top:20px"><h2>Pricing <span class="pillai" style="background:var(--y);font-size:16px;vertical-align:middle">TBD</span></h2>
+<div class="plans">
+<div class="plan"><h3 style="font-size:26px">Free</h3><div class="p">$0</div><ul><li>✓ Connect your AIs</li><li>✓ Recent sessions</li><li>✓ Pick up anywhere</li></ul><span class="btn">Get started</span></div>
+<div class="plan" style="background:var(--y);border-color:var(--y)"><h3 style="font-size:26px">Pro</h3><div class="p">$X<span style="font-size:24px">/mo</span></div><ul><li>✓ Full history</li><li>✓ Share with teammates</li><li>✓ Branches</li></ul><span class="btn">Go Pro</span></div>
+</div></section>
+
+<section id="final" class="wrap" style="padding-top:20px"><div class="final"><div><h2>Never explain<br>twice again.</h2><p style="font-size:20px;margin:18px 0 28px">sessions.mcpbox.dev</p><span class="btn">Get started</span></div>
+<div style="position:relative;height:400px">
+<div class="pc" style="position:absolute;left:40px;top:60px;transform:rotate(-8deg)"><div><span class="pillai gpt">ChatGPT</span><div class="bub me">Draft the launch email</div></div><div><h4>Launch email</h4><small>24 msgs</small></div></div>
+<div class="pc" style="position:absolute;left:250px;top:30px;transform:rotate(5deg)"><div><span class="pillai cl">Claude</span><div class="bub ai">Continuing your launch email…</div></div><div><h4>Launch email</h4><small>continued</small></div></div>
+</div></div></section>
+
+<footer><div><div class="wm">Agent<br>Sessions</div><p style="margin-top:24px;font-size:15px">made by <a href="https://www.stevmolina.com" style="display:inline;font-size:15px" class="lnk">Steven Molina</a></p></div>
+<div><h5>Product</h5><a href="#how">How it works</a><a href="#use">Use cases</a><a href="#pricing">Pricing</a><a href="#guide">Guide</a></div>
+<div><h5>More agents</h5><a href="https://computer.mcpbox.dev">Agent Computer ↗</a><a href="https://brain.mcpbox.dev">Agent Brain ↗</a></div>
+<div><h5>Legal</h5><a href="#privacy" style="font-size:15px">Privacy</a><a style="font-size:15px">Terms</a><a style="font-size:15px">Delete my data</a></div></footer>
+</body></html>

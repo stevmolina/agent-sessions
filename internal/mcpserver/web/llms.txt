@@ -1,0 +1,17 @@
+# Agent Sessions
+
+> Switch AIs. Keep the conversation.
+
+Your history follows you from ChatGPT to Claude to Cursor. Agent Sessions keeps the thread so you never explain it twice.
+
+## Product
+
+- [Home](https://sessions.mcpbox.dev/): landing page
+- [How it works](https://sessions.mcpbox.dev/#how): connect ChatGPT, Claude, and Cursor, then pick the same thread up in any of them
+- [Use cases](https://sessions.mcpbox.dev/#use): switch tools on your own, or hand a session to a teammate
+- [Pricing](https://sessions.mcpbox.dev/#pricing): a free tier is listed; Pro pricing is TBD
+
+## More agents
+
+- [Agent Computer](https://computer.mcpbox.dev)
+- [Agent Brain](https://brain.mcpbox.dev)

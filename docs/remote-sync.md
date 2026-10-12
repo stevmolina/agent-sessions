@@ -57,6 +57,8 @@ Optional `PORT` defaults to `8080`, and `BIND_HOST` defaults to `0.0.0.0`. Store
 
 WorkOS issues tokens. The server checks AuthKit's authorization server metadata issuer, the JWT signature against its JWKS, and the token's issuer, resource audience, expiration, and allowed subject. Token failures return 401 with an `invalid_token` bearer challenge and a link to `/.well-known/oauth-protected-resource`. That public metadata points clients at AuthKit. `/healthz` is public liveness only and never queries Neon, allowing the database to autosuspend.
 
+GET and HEAD `/` serve the public Agent Sessions landing page. `/robots.txt`, `/sitemap.xml`, and `/llms.txt` are public too. Those routes are exact, unauthenticated, and do not query Neon. `/mcp` and the OAuth metadata routes are unchanged.
+
 Before connecting a client, enable Client ID Metadata Document support in WorkOS Connect configuration. Enable Dynamic Client Registration as well if an older MCP client needs it. Add the public MCP resource URL as a Resource Indicator. See the [AuthKit MCP setup](https://workos.com/docs/authkit/mcp) for client registration details. In claude.ai, add a custom connector using that URL and sign in. Claude Code can connect with:
 
 ```bash
