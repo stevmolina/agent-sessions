@@ -1,0 +1,19 @@
+# Agent Sessions
+
+> Search and read past Claude Code, Codex, and Cursor sessions from any AI.
+
+Agent Sessions is one memory for every coding agent. Search past conversations in plain words and continue them in whichever AI you open next.
+
+## Creator
+
+Steven Molina, Forward Deployed AI Engineer
+https://stevmolina.com
+
+## Sibling products
+
+- Agent Computer: https://computer.mcpbox.dev
+- Agent Brain: https://brain.mcpbox.dev
+
+## Home
+
+https://sessions.mcpbox.dev/
