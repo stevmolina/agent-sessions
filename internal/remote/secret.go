@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 )
 
 const (
@@ -21,20 +22,41 @@ func Secret(ctx context.Context, name string) (string, error) {
 	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
 		return value, nil
 	}
+	// One push opens the database twice (rows, then heartbeat). Each Doppler CLI
+	// call costs about a second, so a value is read once per process.
+	if value, ok := secretCache.Load(name); ok {
+		return value.(string), nil
+	}
 	config := dopplerConfig
 	if value := strings.TrimSpace(os.Getenv("SESSIONS_DOPPLER_CONFIG")); value != "" {
 		config = value
 	}
-	cmd := exec.CommandContext(ctx, "doppler", "secrets", "get", name, "-p", dopplerProject, "-c", config, "--plain")
+	value, err := DopplerSecret(ctx, name, dopplerProject, config)
+	if err != nil {
+		return "", errors.New("remote database unavailable")
+	}
+	secretCache.Store(name, value)
+	return value, nil
+}
+
+var secretCache sync.Map
+
+// DopplerSecret reads one value with the logged-in Doppler CLI. An environment
+// variable of the same name wins. Neither stderr nor the value reaches an error.
+func DopplerSecret(ctx context.Context, name, project, config string) (string, error) {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return value, nil
+	}
+	cmd := exec.CommandContext(ctx, "doppler", "secrets", "get", name, "-p", project, "-c", config, "--plain")
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = ioDiscard{}
 	if err := cmd.Run(); err != nil {
-		return "", errors.New("remote database unavailable")
+		return "", errors.New("doppler could not read " + name + " from " + project + "/" + config)
 	}
 	value := strings.TrimSpace(stdout.String())
 	if value == "" {
-		return "", errors.New("remote database unavailable")
+		return "", errors.New("doppler returned an empty " + name)
 	}
 	return value, nil
 }

@@ -24,6 +24,8 @@ var requiredColumns = []string{
 
 type Stats struct {
 	Uploaded, Unchanged, Deleted, Failed int
+	// SkippedPaths are rows that failed the pre-upload verification.
+	SkippedPaths []string
 }
 
 type conn interface {
@@ -48,18 +50,93 @@ func connect(ctx context.Context, secretName string) (*pgx.Conn, error) {
 	return db, nil
 }
 
-func migrate(ctx context.Context, db conn) error {
+// Statements per pipelined round trip. Upserts carry whole bodies, so they go in
+// smaller groups than the tiny ownership rows.
+const (
+	upsertChunk    = 100
+	ownershipChunk = 1000
+)
+
+// batcher is the pipelining half of pgx.Tx and pgx.Conn.
+type batcher interface {
+	SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults
+}
+
+// execAll runs one statement per argument list and returns the rows affected.
+// On a live Postgres connection the statements are pipelined in chunks, so two
+// thousand rows cost a few round trips instead of two thousand. Other conns
+// (the SQLite test double) run them one by one.
+func execAll(ctx context.Context, db conn, action, sql string, args [][]any, chunk int) (int64, error) {
+	var total int64
+	b, pipelined := db.(batcher)
+	if !pipelined {
+		for _, a := range args {
+			tag, err := db.Exec(ctx, sql, a...)
+			if err != nil {
+				return total, sqlError(action, err)
+			}
+			total += tag.RowsAffected()
+		}
+		return total, nil
+	}
+	if chunk < 1 {
+		chunk = 1
+	}
+	for start := 0; start < len(args); start += chunk {
+		end := min(start+chunk, len(args))
+		batch := &pgx.Batch{}
+		for _, a := range args[start:end] {
+			batch.Queue(sql, a...)
+		}
+		res := b.SendBatch(ctx, batch)
+		for range args[start:end] {
+			tag, err := res.Exec()
+			if err != nil {
+				res.Close()
+				return total, sqlError(action, err)
+			}
+			total += tag.RowsAffected()
+		}
+		if err := res.Close(); err != nil {
+			return total, sqlError(action, err)
+		}
+	}
+	return total, nil
+}
+
+func schemaStatements() ([]string, error) {
 	raw, err := schemaFS.ReadFile("schema.sql")
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, stmt := range strings.Split(string(raw), ";") {
+		if stmt = strings.TrimSpace(stmt); stmt != "" {
+			out = append(out, stmt)
+		}
+	}
+	return out, nil
+}
+
+func migrate(ctx context.Context, db conn) error {
+	stmts, err := schemaStatements()
 	if err != nil {
 		return err
 	}
-	for _, stmt := range strings.Split(string(raw), ";") {
-		stmt = strings.TrimSpace(stmt)
-		if stmt == "" {
-			continue
+	if b, ok := db.(batcher); ok {
+		// One round trip for the whole schema, in order.
+		batch := &pgx.Batch{}
+		for _, stmt := range stmts {
+			batch.Queue(stmt)
 		}
-		if _, err := db.Exec(ctx, stmt); err != nil {
+		if err := b.SendBatch(ctx, batch).Close(); err != nil {
 			return sqlError("migrate", err)
+		}
+	} else {
+		for _, stmt := range stmts {
+			if _, err := db.Exec(ctx, stmt); err != nil {
+				return sqlError("migrate", err)
+			}
 		}
 	}
 	return checkColumns(ctx, db)

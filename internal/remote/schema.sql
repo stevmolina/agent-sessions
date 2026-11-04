@@ -29,6 +29,33 @@ GRANT USAGE ON SCHEMA public TO sessions_reader;
 
 GRANT SELECT ON TABLE sessions TO sessions_reader;
 
+GRANT SELECT ON TABLE sessions TO sessions_mcp_reader;
+
+-- One row per machine, written on every push attempt that reaches the database.
+-- `sessions health` reads it with the read-only role. last_error is a short,
+-- fixed message from this program, never transcript text or a secret.
+CREATE TABLE IF NOT EXISTS sessions_push_heartbeats (
+  machine text PRIMARY KEY,
+  last_attempt_at timestamptz NOT NULL,
+  last_success_at timestamptz,
+  last_error text,
+  last_error_at timestamptz,
+  attempts bigint NOT NULL DEFAULT 0,
+  successes bigint NOT NULL DEFAULT 0,
+  failures bigint NOT NULL DEFAULT 0,
+  uploaded integer NOT NULL DEFAULT 0,
+  unchanged integer NOT NULL DEFAULT 0,
+  deleted integer NOT NULL DEFAULT 0,
+  skipped integer NOT NULL DEFAULT 0,
+  duration_ms integer NOT NULL DEFAULT 0,
+  version text NOT NULL DEFAULT '',
+  os text NOT NULL DEFAULT ''
+);
+
+GRANT SELECT ON TABLE sessions_push_heartbeats TO sessions_reader;
+
+GRANT SELECT ON TABLE sessions_push_heartbeats TO sessions_mcp_reader;
+
 -- Separate machine ownership preserves shared chats until their last owner removes them.
 -- RESTRICT prevents old clients from deleting rows with active owners.
 CREATE TABLE IF NOT EXISTS session_machines (
