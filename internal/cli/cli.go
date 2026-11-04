@@ -387,12 +387,19 @@ type textCleaner interface {
 // pushLocked is `sessions push`: one push per machine at a time. A push asked
 // for while another runs is folded into that one (see internal/pushlock).
 func pushLocked(out, errOut io.Writer) int {
-	code, ran, err := pushlock.Run(config.CacheDir(), func() int { return pushOnce(errOut) })
+	dir := config.CacheDir()
+	code, ran, err := pushlock.Run(dir, func() int { return pushOnce(errOut) })
 	if err != nil {
 		return fail(errOut, err)
 	}
 	if !ran {
 		fmt.Fprintln(errOut, "a push is already running; it will run once more when it finishes")
+		return code
+	}
+	// Run stops after MaxRuns. A request still waiting then gets its own
+	// background push now instead of waiting up to 15 minutes for the timer.
+	if pushlock.Pending(dir) && !pushlock.Held(dir) {
+		pushTrigger(errOut)
 	}
 	return code
 }
@@ -414,6 +421,10 @@ func pushOnce(errOut io.Writer) int {
 	}
 	if err != nil {
 		hb.Error = err.Error()
+		var pub publicError
+		if errors.As(err, &pub) {
+			hb.Error = pub.public
+		}
 	}
 	if machine, merr := remote.Machine(); merr == nil && machine != "" {
 		hb.Machine = machine
@@ -439,11 +450,22 @@ type pushResult struct {
 	skipped int // sessions left out because they could not be cleaned
 }
 
+// publicError keeps the full message for the terminal and a fixed one for the
+// shared heartbeat. Doppler errors name projects and configs, and a project can
+// be named like a value it stores.
+type publicError struct {
+	public string
+	err    error
+}
+
+func (e publicError) Error() string { return e.err.Error() }
+func (e publicError) Unwrap() error { return e.err }
+
 func runPush(errOut io.Writer) (pushResult, error) {
 	var res pushResult
 	db, cleaner, err := openIndex()
 	if err != nil {
-		return res, err
+		return res, publicError{public: "could not open the index or read redaction secrets from Doppler (is doppler logged in?)", err: err}
 	}
 	defer db.Close()
 	warnSecretsOverride(errOut)
@@ -567,14 +589,17 @@ func healthCmd(args []string, out, errOut io.Writer) int {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	rows, err := remote.Heartbeats(ctx)
-	if err != nil {
-		return fail(errOut, err)
-	}
 	now := time.Now()
-	machines := health.Build(rows, expected, now, maxAge)
-	if err := health.Write(out, machines, now); err != nil {
-		return fail(errOut, err)
+	rows, readErr := remote.Heartbeats(ctx)
+	if readErr != nil && channel == "" {
+		return fail(errOut, readErr)
+	}
+	var machines []health.Machine
+	if readErr == nil {
+		machines = health.Build(rows, expected, now, maxAge)
+		if err := health.Write(out, machines, now); err != nil {
+			return fail(errOut, err)
+		}
 	}
 	if channel == "" {
 		for _, m := range machines {
@@ -588,7 +613,14 @@ func healthCmd(args []string, out, errOut io.Writer) int {
 	if err != nil {
 		return fail(errOut, err)
 	}
-	changes, next := health.Transitions(prev, machines)
+	var changes []health.Change
+	var next map[string]string
+	if readErr != nil {
+		fmt.Fprintln(errOut, readErr)
+		changes, next = health.Unreachable(prev, readErr.Error())
+	} else {
+		changes, next = health.Transitions(prev, machines)
+	}
 	if len(changes) > 0 {
 		project := envOr("SESSIONS_SLACK_DOPPLER_PROJECT", "claudito")
 		cfg := envOr("SESSIONS_SLACK_DOPPLER_CONFIG", "prd")
@@ -605,6 +637,9 @@ func healthCmd(args []string, out, errOut io.Writer) int {
 	}
 	if err := health.SaveState(statePath, next); err != nil {
 		return fail(errOut, err)
+	}
+	if readErr != nil {
+		return 1
 	}
 	return 0
 }

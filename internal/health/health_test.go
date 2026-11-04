@@ -26,8 +26,12 @@ func TestClassify(t *testing.T) {
 	}{
 		{"no heartbeat", nil, Never, "no push has reached the database"},
 		{"fresh success", &remote.HeartbeatRow{LastAttempt: *at(5 * time.Minute), LastSuccess: at(5 * time.Minute)}, OK, ""},
-		{"latest attempt failed", &remote.HeartbeatRow{LastAttempt: *at(time.Minute), LastSuccess: at(time.Hour), LastError: "remote database unavailable"}, Failing, "remote database unavailable"},
-		{"failed and never succeeded", &remote.HeartbeatRow{LastAttempt: *at(time.Minute), LastError: "upsert failed (23505)"}, Failing, "upsert failed (23505)"},
+		{"one failure is a blip", &remote.HeartbeatRow{LastAttempt: *at(time.Minute), LastSuccess: at(time.Hour), LastError: "remote database unavailable", ConsecutiveFailures: 1}, OK, "last attempt failed once: remote database unavailable"},
+		{"two failures in a row", &remote.HeartbeatRow{LastAttempt: *at(time.Minute), LastSuccess: at(time.Hour), LastError: "remote database unavailable", ConsecutiveFailures: 2}, Failing, "remote database unavailable (2 attempts in a row)"},
+		{"failed and never succeeded", &remote.HeartbeatRow{LastAttempt: *at(time.Minute), LastError: "upsert failed (23505)", ConsecutiveFailures: 3}, Failing, "upsert failed (23505) (3 attempts in a row)"},
+		{"one failure, never succeeded", &remote.HeartbeatRow{LastAttempt: *at(time.Minute), LastError: "upsert failed (23505)", ConsecutiveFailures: 1}, Never, "no successful push yet; last error: upsert failed (23505)"},
+		{"skipped sessions are a note", &remote.HeartbeatRow{LastAttempt: *at(time.Minute), LastSuccess: at(time.Minute), Skipped: 3}, OK, "3 session(s) skipped: could not be cleaned"},
+		{"failing beats stale", &remote.HeartbeatRow{LastAttempt: *at(time.Minute), LastSuccess: at(72 * time.Hour), LastError: "x", ConsecutiveFailures: 9}, Failing, "x (9 attempts in a row)"},
 		{"old error, newer success", &remote.HeartbeatRow{LastAttempt: *at(time.Minute), LastSuccess: at(time.Minute), LastError: ""}, OK, ""},
 		{"silent for two days", &remote.HeartbeatRow{LastAttempt: *at(49 * time.Hour), LastSuccess: at(49 * time.Hour)}, Stale, "no successful push for 2d"},
 		{"just inside the window", &remote.HeartbeatRow{LastAttempt: *at(23 * time.Hour), LastSuccess: at(23 * time.Hour)}, OK, ""},
@@ -49,6 +53,46 @@ func TestBuildAddsExpectedMachinesThatNeverPushed(t *testing.T) {
 	}
 	if got[0].Status != OK || got[1].Status != Never {
 		t.Fatalf("unexpected statuses: %s %s", got[0].Status, got[1].Status)
+	}
+}
+
+func TestBuildForgetsOldUnexpectedNames(t *testing.T) {
+	old := now.Add(-8 * 24 * time.Hour)
+	rows := []remote.HeartbeatRow{
+		{Machine: "192.168.1.10", LastAttempt: old, LastSuccess: &old},
+		{Machine: "mac", LastAttempt: now, LastSuccess: &now},
+	}
+	got := Build(rows, []string{"mac"}, now, DefaultMaxAge)
+	if len(got) != 1 || got[0].Name != "mac" {
+		t.Fatalf("old unexpected name should be hidden: %+v", got)
+	}
+	if got = Build(rows, nil, now, DefaultMaxAge); len(got) != 2 {
+		t.Fatalf("without --expect every machine is shown: %+v", got)
+	}
+}
+
+func TestUnreachableDatabaseAnnouncesOnceAndRecovers(t *testing.T) {
+	prev := map[string]string{"vps": "bad", "mac": "ok"}
+	changes, state := Unreachable(prev, "remote database unavailable")
+	if len(changes) != 1 || changes[0].Machine.Name != DatabaseKey {
+		t.Fatalf("want one database alert: %+v", changes)
+	}
+	if state["vps"] != "bad" || state["mac"] != "ok" {
+		t.Fatalf("machine states must be kept: %v", state)
+	}
+	if changes, state = Unreachable(state, "remote database unavailable"); len(changes) != 0 {
+		t.Fatalf("still down must be quiet: %+v", changes)
+	}
+	machines := []Machine{{Name: "vps", Status: Failing, Reason: "x"}, {Name: "mac", Status: OK}}
+	changes, state = Transitions(state, machines)
+	if len(changes) != 1 || changes[0].Machine.Name != DatabaseKey || !changes[0].Recovered {
+		t.Fatalf("want only the database recovery, not a repeat of vps: %+v", changes)
+	}
+	if _, ok := state[DatabaseKey]; ok {
+		t.Fatal("database state should clear after recovery")
+	}
+	if !strings.Contains(Message(changes, now), "can read the shared database again") {
+		t.Fatal("recovery message wrong")
 	}
 }
 

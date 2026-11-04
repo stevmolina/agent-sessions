@@ -34,6 +34,9 @@ else
   gh release download "${tag}" -R "${repo}" -p "${asset}" -D "${tmp}" || die "no ${asset} in release ${tag}"
   chmod +x "${tmp}/${asset}"
   got="$("${tmp}/${asset}" version)" || die "downloaded binary does not run"
+  # The release is replaced asset by asset; never install a binary that does not
+  # match VERSION. The next run picks up the finished release.
+  [ "${got}" = "${want}" ] || die "release is mid-update (binary ${got}, VERSION ${want}); run again in a minute"
   mkdir -p "${bindir}"
   # Rename over the old file so a running push keeps its inode.
   mv -f "${tmp}/${asset}" "${bin}.new"

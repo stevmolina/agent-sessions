@@ -123,13 +123,16 @@ func migrate(ctx context.Context, db conn) error {
 	if err != nil {
 		return err
 	}
-	if b, ok := db.(batcher); ok {
-		// One round trip for the whole schema, in order.
-		batch := &pgx.Batch{}
-		for _, stmt := range stmts {
-			batch.Queue(stmt)
+	if _, ok := db.(batcher); ok {
+		// One round trip for the whole schema, in order. Exec with no arguments uses
+		// the simple protocol, which runs each statement before parsing the next. A
+		// pgx.Batch would prepare every statement first and fail on an empty database,
+		// where later statements name tables the earlier ones create.
+		raw, err := schemaFS.ReadFile("schema.sql")
+		if err != nil {
+			return err
 		}
-		if err := b.SendBatch(ctx, batch).Close(); err != nil {
+		if _, err := db.Exec(ctx, string(raw)); err != nil {
 			return sqlError("migrate", err)
 		}
 	} else {

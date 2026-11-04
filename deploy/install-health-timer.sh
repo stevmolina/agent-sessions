@@ -9,7 +9,7 @@
 # (claudito/prd) at run time; nothing secret is written here.
 set -eu
 channel="${1:?usage: install-health-timer.sh CHANNEL_ID EXPECTED_MACHINES}"
-expect="${2:?usage: install-health-timer.sh CHANNEL_ID EXPECTED_MACHINES}"
+expect="$(printf '%s' "${2:?usage: install-health-timer.sh CHANNEL_ID EXPECTED_MACHINES}" | tr -d '[:space:]')"
 bin="${HOME}/.local/bin/sessions"
 die() { echo "install-health-timer: $*" >&2; exit 1; }
 [ "$(uname -s)" = Linux ] || die "Linux only (systemd user timer)"
@@ -42,4 +42,7 @@ EOF
 systemctl --user daemon-reload
 systemctl --user enable --now sessions-health.timer >/dev/null 2>&1 || die "systemctl could not enable sessions-health.timer"
 systemctl --user is-active --quiet sessions-health.timer || die "sessions-health.timer is not active"
+if [ "$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null || echo unknown)" != "yes" ]; then
+  echo "warning: linger is off, so the timer stops when you log out (sudo loginctl enable-linger $(id -un))" >&2
+fi
 echo "ok: sessions-health.timer is enabled and active (hourly; journalctl --user -u sessions-health)"

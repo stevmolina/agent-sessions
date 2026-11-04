@@ -84,17 +84,35 @@ func TestHeartbeatCountsAttemptsAndKeepsLastSuccess(t *testing.T) {
 	if s.lastError.String != "remote database unavailable" || !s.hasErrorAt {
 		t.Fatalf("error recorded wrong: %+v", s)
 	}
+	if err := recordHeartbeat(ctx, db, failed); err != nil {
+		t.Fatal(err)
+	}
+	if n := consecutive(t, db.db, "mac"); n != 2 {
+		t.Fatalf("want 2 failures in a row, got %d", n)
+	}
 
 	if err := recordHeartbeat(ctx, db, ok); err != nil {
 		t.Fatal(err)
 	}
 	s = readHeartbeat(t, db.db, "mac")
-	if s.attempts != 3 || s.successes != 2 || s.lastError.Valid {
+	if s.attempts != 4 || s.successes != 2 || s.failures != 2 || s.lastError.Valid {
 		t.Fatalf("recovery recorded wrong: %+v", s)
+	}
+	if n := consecutive(t, db.db, "mac"); n != 0 {
+		t.Fatalf("success should reset the failure streak, got %d", n)
 	}
 	if !s.hasErrorAt {
 		t.Fatal("recovery erased when the last error happened")
 	}
+}
+
+func consecutive(t *testing.T, db *sql.DB, machine string) int {
+	t.Helper()
+	var n int
+	if err := db.QueryRow(`SELECT consecutive_failures FROM sessions_push_heartbeats WHERE machine = ?`, machine).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 func TestShortErrorKeepsOneShortLine(t *testing.T) {

@@ -58,9 +58,10 @@ EOF
   # bootout returns before the job is fully gone; bootstrap can then fail with
   # "5: Input/output error". Retry a few times.
   n=0
-  until launchctl bootstrap "${domain}" "${plist}" 2>/dev/null; do
+  until err="$(launchctl bootstrap "${domain}" "${plist}" 2>&1)"; do
     n=$((n + 1))
-    [ "${n}" -lt 5 ] || die "launchctl bootstrap failed for ${plist}"
+    # Error 125 over SSH means no GUI login session; retrying will not help.
+    [ "${n}" -lt 5 ] || die "launchctl bootstrap failed for ${plist}: ${err}"
     sleep 1
   done
   launchctl print "${domain}/${label}" >/dev/null 2>&1 || die "launchd does not have ${label} loaded"
@@ -78,7 +79,8 @@ Description=Push cleaned session transcripts
 Type=oneshot
 ExecStart=${bin} push
 Environment=PATH=${path}
-TimeoutStartSec=20min
+# One run can loop up to five pushes (pushlock.MaxRuns), each with a 10 minute cap.
+TimeoutStartSec=60min
 EOF
   cat > "${dir}/sessions-push.timer" <<EOF
 [Unit]

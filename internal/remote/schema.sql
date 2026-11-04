@@ -29,8 +29,6 @@ GRANT USAGE ON SCHEMA public TO sessions_reader;
 
 GRANT SELECT ON TABLE sessions TO sessions_reader;
 
-GRANT SELECT ON TABLE sessions TO sessions_mcp_reader;
-
 -- One row per machine, written on every push attempt that reaches the database.
 -- `sessions health` reads it with the read-only role. last_error is a short,
 -- fixed message from this program, never transcript text or a secret.
@@ -43,6 +41,7 @@ CREATE TABLE IF NOT EXISTS sessions_push_heartbeats (
   attempts bigint NOT NULL DEFAULT 0,
   successes bigint NOT NULL DEFAULT 0,
   failures bigint NOT NULL DEFAULT 0,
+  consecutive_failures integer NOT NULL DEFAULT 0,
   uploaded integer NOT NULL DEFAULT 0,
   unchanged integer NOT NULL DEFAULT 0,
   deleted integer NOT NULL DEFAULT 0,
@@ -52,9 +51,15 @@ CREATE TABLE IF NOT EXISTS sessions_push_heartbeats (
   os text NOT NULL DEFAULT ''
 );
 
+-- Failed attempts since the last success. One blip does not page; two in a row do.
+-- Added after the table first shipped, hence the ALTER for existing databases.
+ALTER TABLE sessions_push_heartbeats ADD COLUMN IF NOT EXISTS consecutive_failures integer NOT NULL DEFAULT 0;
+
 GRANT SELECT ON TABLE sessions_push_heartbeats TO sessions_reader;
 
-GRANT SELECT ON TABLE sessions_push_heartbeats TO sessions_mcp_reader;
+-- The read-only URL logs in as sessions_mcp_reader. Granting to a role that does
+-- not exist would fail every push in a database without it, so check first.
+DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'sessions_mcp_reader') THEN GRANT SELECT ON TABLE sessions, sessions_push_heartbeats TO sessions_mcp_reader; END IF; END $$;
 
 -- Separate machine ownership preserves shared chats until their last owner removes them.
 -- RESTRICT prevents old clients from deleting rows with active owners.

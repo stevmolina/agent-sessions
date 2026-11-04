@@ -42,19 +42,24 @@ jobs:
               -ldflags "-s -w -X github.com/usuario/sessions/internal/version.Version=${version}" \
               -o "dist/sessions_${os}_${arch}" ./cmd/sessions
           done
-          echo "$version" > dist/VERSION
+          mkdir -p meta
+          echo "$version" > meta/VERSION
           cp deploy/install.sh deploy/install-timer.sh deploy/install-health-timer.sh dist/
-          ls -l dist
+          ls -l dist meta
 
+      # VERSION goes up last. install.sh trusts VERSION only when the binary it
+      # downloads reports the same version, so a half-replaced release is refused,
+      # never installed.
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          version="$(cat meta/VERSION)"
           git tag -f latest "$GITHUB_SHA"
           git push -f origin refs/tags/latest
-          if gh release view latest >/dev/null 2>&1; then
-            gh release edit latest --title "latest ($(cat dist/VERSION))" --notes "Built from ${GITHUB_SHA}."
-            gh release upload latest dist/* --clobber
-          else
-            gh release create latest dist/* --title "latest ($(cat dist/VERSION))" --notes "Built from ${GITHUB_SHA}." --latest
+          if ! gh release view latest >/dev/null 2>&1; then
+            gh release create latest --title "latest (${version})" --notes "Built from ${GITHUB_SHA}." --latest
           fi
+          gh release upload latest dist/* --clobber
+          gh release upload latest meta/VERSION --clobber
+          gh release edit latest --title "latest (${version})" --notes "Built from ${GITHUB_SHA}."

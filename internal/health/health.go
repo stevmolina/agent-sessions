@@ -37,21 +37,41 @@ type Machine struct {
 // Bad reports whether the machine needs attention.
 func (m Machine) Bad() bool { return m.Status != OK }
 
-// Classify judges one machine. A failed latest attempt wins over age, because it
-// carries the reason; age catches a machine that stopped trying altogether.
+// FailAfter is how many attempts in a row must fail before a machine is failing.
+// One failure is often a network blip that the next push fixes.
+const FailAfter = 2
+
+// ForgetAfter hides a machine that is not in --expect and has not tried to push
+// for this long. Host names drift (the Fedora laptop once pushed as an IP
+// address); an old name should not stay red forever. It was reported stale long
+// before it disappears.
+const ForgetAfter = 7 * 24 * time.Hour
+
+// Classify judges one machine. Repeated failures win over age, because they carry
+// the reason; age catches a machine that stopped trying altogether. An ok machine
+// can still carry a note (one failed attempt, skipped sessions).
 func Classify(row *remote.HeartbeatRow, now time.Time, maxAge time.Duration) (Status, string) {
 	if row == nil {
 		return Never, "no push has reached the database"
 	}
 	failedLast := row.LastError != "" && (row.LastSuccess == nil || !row.LastSuccess.After(row.LastAttempt))
-	if failedLast {
-		return Failing, row.LastError
+	if failedLast && row.ConsecutiveFailures >= FailAfter {
+		return Failing, fmt.Sprintf("%s (%d attempts in a row)", row.LastError, row.ConsecutiveFailures)
 	}
 	if row.LastSuccess == nil {
+		if failedLast {
+			return Never, "no successful push yet; last error: " + row.LastError
+		}
 		return Never, "no successful push yet"
 	}
 	if age := now.Sub(*row.LastSuccess); age > maxAge {
 		return Stale, "no successful push for " + Ago(age)
+	}
+	switch {
+	case failedLast:
+		return OK, "last attempt failed once: " + row.LastError
+	case row.Skipped > 0:
+		return OK, fmt.Sprintf("%d session(s) skipped: could not be cleaned", row.Skipped)
 	}
 	return OK, ""
 }
@@ -63,14 +83,21 @@ func Build(rows []remote.HeartbeatRow, expected []string, now time.Time, maxAge 
 	for i := range rows {
 		byName[rows[i].Machine] = &rows[i]
 	}
-	names := map[string]bool{}
-	for name := range byName {
-		names[name] = true
-	}
+	wanted := map[string]bool{}
 	for _, name := range expected {
 		if name = strings.TrimSpace(name); name != "" {
-			names[name] = true
+			wanted[name] = true
 		}
+	}
+	names := map[string]bool{}
+	for name, row := range byName {
+		if len(wanted) > 0 && !wanted[name] && now.Sub(row.LastAttempt) > ForgetAfter {
+			continue
+		}
+		names[name] = true
+	}
+	for name := range wanted {
+		names[name] = true
 	}
 	out := make([]Machine, 0, len(names))
 	for name := range names {
@@ -150,7 +177,29 @@ func Transitions(prev map[string]string, machines []Machine) ([]Change, map[stri
 			changes = append(changes, Change{Machine: m, Recovered: true})
 		}
 	}
+	// The heartbeats could be read, so the database is reachable again.
+	if prev[DatabaseKey] == "bad" {
+		changes = append(changes, Change{Machine: Machine{Name: DatabaseKey, Status: OK}, Recovered: true})
+	}
 	return changes, next
+}
+
+// DatabaseKey is the alert state for the shared database itself.
+const DatabaseKey = "shared database"
+
+// Unreachable handles a run that could not read the heartbeats at all. Without
+// it the alert would go quiet exactly when the database is broken. Machine states
+// are kept as they were, so they are not re-announced when it comes back.
+func Unreachable(prev map[string]string, reason string) ([]Change, map[string]string) {
+	next := map[string]string{}
+	for k, v := range prev {
+		next[k] = v
+	}
+	next[DatabaseKey] = "bad"
+	if prev[DatabaseKey] == "bad" {
+		return nil, next
+	}
+	return []Change{{Machine: Machine{Name: DatabaseKey, Status: Failing, Reason: reason}}}, next
 }
 
 // Message is the Slack text for a set of changes.
@@ -159,6 +208,14 @@ func Message(changes []Change, now time.Time) string {
 	b.WriteString("Session sync")
 	for _, c := range changes {
 		b.WriteString("\n")
+		if c.Machine.Name == DatabaseKey {
+			if c.Recovered {
+				b.WriteString("• the health check can read the shared database again")
+			} else {
+				fmt.Fprintf(&b, "• the health check cannot read the shared database: %s", c.Machine.Reason)
+			}
+			continue
+		}
 		if c.Recovered {
 			fmt.Fprintf(&b, "• %s is pushing again", c.Machine.Name)
 			continue

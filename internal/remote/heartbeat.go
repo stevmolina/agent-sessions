@@ -25,6 +25,7 @@ type HeartbeatRow struct {
 	LastSuccess, LastErrorAt              *time.Time
 	LastError                             string
 	Attempts, Successes, Failures         int64
+	ConsecutiveFailures                   int
 	Uploaded, Unchanged, Deleted, Skipped int
 	DurationMS                            int
 	Version, OS                           string
@@ -33,10 +34,10 @@ type HeartbeatRow struct {
 // $2 is 1 for a success and 0 for a failure, so the counters are plain sums.
 const heartbeatSQL = `INSERT INTO sessions_push_heartbeats (
   machine, last_attempt_at, last_success_at, last_error, last_error_at,
-  attempts, successes, failures, uploaded, unchanged, deleted, skipped, duration_ms, version, os
+  attempts, successes, failures, consecutive_failures, uploaded, unchanged, deleted, skipped, duration_ms, version, os
 ) VALUES (
   $1, now(), CASE WHEN $2 = 1 THEN now() END, NULLIF($3, ''), CASE WHEN $2 = 1 THEN NULL ELSE now() END,
-  1, $2, 1 - $2, $4, $5, $6, $7, $8, $9, $10
+  1, $2, 1 - $2, 1 - $2, $4, $5, $6, $7, $8, $9, $10
 ) ON CONFLICT (machine) DO UPDATE SET
   last_attempt_at = now(),
   last_success_at = CASE WHEN $2 = 1 THEN now() ELSE sessions_push_heartbeats.last_success_at END,
@@ -45,11 +46,12 @@ const heartbeatSQL = `INSERT INTO sessions_push_heartbeats (
   attempts = sessions_push_heartbeats.attempts + 1,
   successes = sessions_push_heartbeats.successes + $2,
   failures = sessions_push_heartbeats.failures + 1 - $2,
+  consecutive_failures = CASE WHEN $2 = 1 THEN 0 ELSE sessions_push_heartbeats.consecutive_failures + 1 END,
   uploaded = $4, unchanged = $5, deleted = $6, skipped = $7,
   duration_ms = $8, version = $9, os = $10`
 
 const heartbeatsSQL = `SELECT machine, last_attempt_at, last_success_at, last_error_at, coalesce(last_error, ''),
- attempts, successes, failures, uploaded, unchanged, deleted, skipped, duration_ms, version, os
+ attempts, successes, failures, consecutive_failures, uploaded, unchanged, deleted, skipped, duration_ms, version, os
  FROM sessions_push_heartbeats ORDER BY machine`
 
 // Machine is the name rows and heartbeats are filed under: the host name.
@@ -120,7 +122,7 @@ func Heartbeats(ctx context.Context) ([]HeartbeatRow, error) {
 	for rows.Next() {
 		var r HeartbeatRow
 		if err := rows.Scan(&r.Machine, &r.LastAttempt, &r.LastSuccess, &r.LastErrorAt, &r.LastError,
-			&r.Attempts, &r.Successes, &r.Failures, &r.Uploaded, &r.Unchanged, &r.Deleted, &r.Skipped,
+			&r.Attempts, &r.Successes, &r.Failures, &r.ConsecutiveFailures, &r.Uploaded, &r.Unchanged, &r.Deleted, &r.Skipped,
 			&r.DurationMS, &r.Version, &r.OS); err != nil {
 			return nil, sqlError("health", err)
 		}
