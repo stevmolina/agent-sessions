@@ -17,7 +17,8 @@ die() { echo "install-timer: $*" >&2; exit 1; }
 case "$(uname -s)" in
 Darwin)
   prefix="$(brew --prefix 2>/dev/null || echo /opt/homebrew)"
-  path="${HOME}/.local/bin:${prefix}/bin:/usr/bin:/bin"
+  # /usr/local/bin covers Doppler installed by its own script or Intel Homebrew.
+  path="${HOME}/.local/bin:${prefix}/bin:/usr/local/bin:/usr/bin:/bin"
   dir="${HOME}/Library/LaunchAgents"
   logdir="${HOME}/.cache/sessions"
   mkdir -p "${dir}" "${logdir}"

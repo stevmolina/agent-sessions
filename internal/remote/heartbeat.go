@@ -101,7 +101,7 @@ func ShortError(msg string) string {
 	}
 	const max = 200
 	if utf8.RuneCountInString(msg) > max {
-		msg = string([]rune(msg)[:max]) + "..."
+		msg = string([]rune(msg)[:max-3]) + "..."
 	}
 	return msg
 }

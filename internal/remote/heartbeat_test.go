@@ -120,7 +120,7 @@ func TestShortErrorKeepsOneShortLine(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 	long := strings.Repeat("x", 500)
-	if got := ShortError(long); len(got) != 203 {
+	if got := ShortError(long); len(got) != 200 {
 		t.Fatalf("long error not cut: %d", len(got))
 	}
 }

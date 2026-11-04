@@ -408,6 +408,15 @@ func pushLocked(out, errOut io.Writer) int {
 // shared heartbeat table.
 func pushOnce(errOut io.Writer) int {
 	start := time.Now()
+	// The upload has a 10 minute context, but reading transcripts does not. A read
+	// stuck on a hung disk or network mount would hold the push lock forever and
+	// every later trigger would just queue behind it. Exit instead; the kernel
+	// drops the lock and the next trigger or timer starts fresh.
+	watchdog := time.AfterFunc(pushWatchdog, func() {
+		fmt.Fprintf(errOut, "push exceeded %s, exiting\n", pushWatchdog)
+		os.Exit(3)
+	})
+	defer watchdog.Stop()
 	res, err := runPush(errOut)
 	hb := remote.Heartbeat{
 		OK:        err == nil,
@@ -444,6 +453,10 @@ func pushOnce(errOut io.Writer) int {
 	}
 	return 0
 }
+
+// pushWatchdog bounds one push, refresh included. Five of them fit in the
+// systemd unit's 60 minute TimeoutStartSec.
+const pushWatchdog = 11 * time.Minute
 
 type pushResult struct {
 	stats   remote.Stats
