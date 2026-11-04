@@ -6,6 +6,14 @@ The index covers native Cursor, Claude Code, and Codex JSONL files, plus T3 Code
 
 ## Install
 
+On a machine that pushes, from the GitHub release (needs `gh` signed in):
+
+```bash
+gh release download latest -R stevmolina/agent-sessions -p install.sh -O - | sh
+```
+
+That installs `~/.local/bin/sessions` for this OS and CPU, then the 15 minute push timer, and checks that launchd or systemd really loaded it. `~/.agents/scripts/install-hooks.py` runs the same installer and adds the turn-end hooks, so a machine set up from `~/.agents` gets everything. Every push to `main` rebuilds the `latest` release.
+
 From this repo:
 
 ```bash
@@ -19,10 +27,15 @@ sessions index
 sessions search "query"
 sessions show SOURCE:ID
 sessions push
+sessions push --trigger
+sessions health
+sessions version
 sessions search "query" --remote
 sessions show SOURCE:ID --remote
 sessions mcp
 ```
+
+`push --trigger` is for agent hooks. It returns at once and pushes in the background. One push runs per machine; a request made during a push makes that push run once more. `health` prints each machine's last push from the shared database and flags a machine whose last attempt failed or that has not pushed in 24 hours. See [docs/remote-sync.md](docs/remote-sync.md#keeping-it-running).
 
 `search` refreshes stale sources first. You do not need `index` unless you want a refresh without searching. `search --remote` and `show --remote` read the Postgres copy and do not refresh.
 

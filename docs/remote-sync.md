@@ -25,13 +25,38 @@ Measured on this Mac on 2026-09-28: 1,006 sessions, 14.0 MB of body text, averag
    - Paths, cwd, branch, and model are not redacted. `show` needs the real path. Exact matching does not catch percent-encoded or re-wrapped copies of a value. Gitleaks still runs on the text it can see.
    - The index schema is version 4. An older binary refuses it, so it cannot write raw turns over cleaned ones.
 3. **Verify.** `internal/clean/clean_test.go` builds fake keys at run time and checks that none of them survive. Before any upload, `gitleaks dir ~/.cache/sessions --redact --max-target-megabytes 200` must report 0 findings. A one-time canary and a weekly trufflehog scan of exported rows come later and do not block the first upload.
-4. **Upload.** `sessions push` refreshes, checks each stored title and body still redacts to itself, then upserts by source and id. The row records `os.Hostname()`. A clean failure skips that session and does not delete the cloud copy. Missing previously indexed roots and discovery errors prevent deletion. A complete empty snapshot releases that machine's remote ownership. Shared source/id rows have separate machine ownership records and disappear only after the last machine releases them. `SESSIONS_SECRETS_JSON` (`v1-override:`) is refused. `deploy/install-timer.sh` installs a 15 minute timer: launchd on macOS, a systemd user timer on Linux. It uses `uname -s` and `$HOME/.local/bin/sessions`; only macOS requires `brew --prefix`.
+4. **Upload.** `sessions push` refreshes, then upserts by source and id. Each row about to be uploaded must still redact to itself; unchanged rows were checked when they were uploaded under the same clean fingerprint and are not checked again. The row records `os.Hostname()`. A clean failure skips that session and does not delete the cloud copy. Missing previously indexed roots and discovery errors prevent deletion. A complete empty snapshot releases that machine's remote ownership. Shared source/id rows have separate machine ownership records and disappear only after the last machine releases them. A row with no owner is never deleted by a push. `SESSIONS_SECRETS_JSON` (`v1-override:`) is refused. Upserts, ownership writes and the schema are pipelined, and rows the machine already owns are not rewritten, so a push with nothing new takes about 16 seconds on the Mac (most of it the Doppler read), not one round trip per session.
 5. **Store.** Neon project `sessions` (`falling-field-30105744`), database `neondb`, table `sessions`. Schema is `internal/remote/schema.sql`: metadata, cleaned body, turns as jsonb, a generated `search` tsvector, and a GIN index. No raw JSONL. `DATABASE_URL` (owner) and `DATABASE_URL_READONLY` live in Doppler project `sessions`, configs `dev` and `prd`. `doppler.yaml` names that project. Nothing in the repo is a connection string.
 6. **Access.** `sessions search --remote` and `sessions show --remote` use the read-only URL and do not refresh. SQL-created role `sessions_mcp_reader` has `SELECT` only. `push` uses the owner URL and applies the schema.
 
 `SESSIONS_SECRETS_JSON` points at a JSON object and replaces the Doppler fetch. `index` and `search` print a warning when it is set. Tests set it. Leave it unset for a real index.
 
 If Doppler cannot be read, `index` and `search` stop before writing. The previous index is left as it is. Local `show` does not contact Doppler. `search --remote` and `show --remote` need `DATABASE_URL_READONLY` and do not read Doppler secrets for redaction.
+
+A Doppler value that its own placeholder would contain (a bucket named like its project, `[REDACTED:project/NAME]`) is labelled `[REDACTED:NAME]`, or `[REDACTED:secret]` if that still contains it. Otherwise the placeholder fails the leftover check and the session is skipped on every run.
+
+## Keeping it running
+
+Three layers, so a stopped machine is noticed within a day instead of after weeks. On 2026-11-02 the shared copy was 19 days old: the Mac's launchd job had quietly unloaded and nothing reported it.
+
+```mermaid
+flowchart LR
+  T[Turn ends in Claude, Codex or Cursor] -->|hook: push --trigger| P[One push per machine]
+  C[15 min timer] --> P
+  P -->|rows + heartbeat| DB[(Neon)]
+  DB --> H[Hourly health check on ovh]
+  H -->|only on change| S[Slack steven-inbox]
+```
+
+1. **Push when a turn ends.** `~/.agents/hooks/sessions-push.sh` runs on Claude `Stop` and `SessionEnd`, Codex `Stop`, and Cursor `stop`. It calls `sessions push --trigger`, prints `{}`, and always exits 0. The trigger writes `push.pending` in `~/.cache/sessions`, and returns if `push.lock` is held. Otherwise it starts `sessions push` detached (own session, output in `push.log`). `sessions push` writes the pending marker, takes an exclusive `flock` on `push.lock` (the kernel drops it if the process dies), and pushes while markers keep arriving, at most five times. A request written before the lock is tried is always seen: either the lock is free, or the holder finds the marker when it checks again after unlocking. `internal/pushlock` has the tests.
+2. **Timer as a safety net.** `deploy/install-timer.sh` installs the 15 minute launchd job (`com.stevmolina.sessions-push`, log `~/.cache/sessions/timer.log`) or systemd user timer (`sessions-push.timer`). It re-enables a disabled job, retries `launchctl bootstrap`, and then fails unless `launchctl print` or `systemctl --user is-active` shows it loaded. Run it again any time.
+3. **Heartbeat and alert.** Every push attempt that reaches the database upserts one row in `sessions_push_heartbeats`: last attempt, last success, last error (one line, at most 200 characters, a fixed message from this program), attempt, success and failure counts, the last run's counts and duration, binary version, and OS. The read-only role can select it. `sessions health` prints the table and exits 1 if any machine is bad: its last two or more attempts failed (`consecutive_failures`; a single failure is a note, since the next push usually fixes it), it has no successful push in 24 hours (`--max-age`), or it never pushed. Skipped sessions are a note, not an alert. `--expect` (or `SESSIONS_EXPECTED_MACHINES`) adds machines that should push, so one that cannot reach the database at all, for example with Doppler signed out, still shows as `never`. With `--expect`, a machine outside the list that has not tried for 7 days is hidden, because host names drift. On ovh, `deploy/install-health-timer.sh` runs `sessions health --notify-slack C0C9S6R2NF7 --expect ...` hourly. It posts to `steven-inbox` with the Claudito bot token (Doppler `claudito/prd`) only when a machine turns bad or recovers, and remembers what it announced in `~/.cache/sessions/health-alert.json`. A failed post leaves that file alone, so the next run tries again. If the check cannot read the heartbeats at all, it posts that once (and again when it can), keeping the machine states, so the alert does not go quiet when the database breaks.
+
+### Getting the binary onto a machine
+
+`.github/workflows/release.yml` builds darwin and linux, arm64 and amd64, on every push to `main` (pure Go, so one runner cross-compiles), and replaces the assets on the rolling `latest` release with the binaries, `VERSION`, and the three install scripts. `deploy/install.sh` compares `VERSION` with `sessions version`, downloads only when they differ, then runs the timer installer. It needs only `gh`, which every machine already has signed in. `~/.agents/scripts/install-sessions.sh` wraps it for `install-hooks.py` and chezmoi, so a new machine, or the Fedora laptop on its next apply, gets the binary, the timer and the hooks from setup.
+
+Pushing also needs `doppler login` on the machine. Without it every attempt fails before it can reach the database, so the machine writes no heartbeat; `--expect` is what makes it visible.
 
 ## Access
 

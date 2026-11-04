@@ -152,3 +152,34 @@ func jwt() string {
 	payload := enc([]byte(`{"sub":"1234567890","name":"Ada"}`))
 	return header + "." + payload + "." + mixed(32)
 }
+
+// A project named like one of its values (bucket "media-bucket-prod-77" in project
+// "media-bucket-prod-77") used to produce [REDACTED:media-bucket-prod-77/R2_BUCKET].
+// That placeholder still contains the value, so every session mentioning it was
+// skipped on every run.
+func TestPlaceholderNeverContainsASecretValue(t *testing.T) {
+	value := "media-bucket-prod-77"
+	secrets := map[string]string{value + "/R2_BUCKET": value}
+	got, err := Redact("upload to "+value+" please", secrets)
+	if err != nil {
+		t.Fatalf("redaction failed: %v", err)
+	}
+	if got != "upload to [REDACTED:R2_BUCKET] please" {
+		t.Fatalf("unexpected placeholder: %q", got)
+	}
+	again, err := Redact(got, secrets)
+	if err != nil || again != got {
+		t.Fatal("cleaned text is not stable under a second pass")
+	}
+}
+
+func TestPlaceholderFallsBackToGenericLabel(t *testing.T) {
+	value := "R2_BUCKET-and-more"
+	got, err := Redact("see "+value, map[string]string{"x/" + value: value})
+	if err != nil {
+		t.Fatalf("redaction failed: %v", err)
+	}
+	if got != "see [REDACTED:secret]" {
+		t.Fatalf("unexpected placeholder: %q", got)
+	}
+}

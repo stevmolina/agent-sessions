@@ -20,7 +20,10 @@ func expand(path string) string {
 	}
 	return path
 }
-func IndexPath() string  { return envPath("SESSIONS_INDEX", ".cache/sessions/index.sqlite") }
+func IndexPath() string { return envPath("SESSIONS_INDEX", ".cache/sessions/index.sqlite") }
+
+// CacheDir holds the index, the push lock, the pending marker, and the push log.
+func CacheDir() string   { return filepath.Dir(IndexPath()) }
 func CursorRoot() string { return envPath("SESSIONS_CURSOR_ROOT", ".cursor/projects") }
 func ClaudeRoot() string { return envPath("SESSIONS_CLAUDE_ROOT", ".claude/projects") }
 func CodexRoot() string  { return envPath("SESSIONS_CODEX_ROOT", ".codex/sessions") }

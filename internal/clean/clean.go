@@ -216,7 +216,37 @@ func buildReplacements(secrets map[string]string) []replacement {
 		}
 		return out[i].label < out[j].label
 	})
+	for i := range out {
+		out[i].label = safeLabel(out[i].label, out)
+	}
 	return out
+}
+
+// safeLabel keeps a secret value out of its own placeholder. A Doppler project
+// can be named after a value it stores (a bucket called like the project), and
+// [REDACTED:project/NAME] would then still contain that value. Such text fails the
+// leftover check and the session is skipped on every run.
+func safeLabel(label string, repl []replacement) string {
+	candidates := []string{label}
+	if i := strings.LastIndex(label, "/"); i >= 0 && i+1 < len(label) {
+		candidates = append(candidates, label[i+1:])
+	}
+	candidates = append(candidates, "secret")
+	for _, c := range candidates {
+		if !containsValue(placeholder(c), repl) {
+			return c
+		}
+	}
+	return "secret"
+}
+
+func containsValue(text string, repl []replacement) bool {
+	for _, r := range repl {
+		if strings.Contains(text, r.value) {
+			return true
+		}
+	}
+	return false
 }
 
 // usable drops values that would chew up ordinary prose.

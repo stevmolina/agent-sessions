@@ -1,0 +1,65 @@
+# Publish binaries for every machine that pushes, on each push to main.
+#
+# One rolling release, tag `latest`, holds the four binaries, the install scripts,
+# and VERSION (the commit the binaries were built from). deploy/install.sh reads
+# VERSION and downloads only when it differs from the installed binary.
+# The code is pure Go (modernc SQLite), so one Linux runner cross-compiles all four.
+name: release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - run: go test ./...
+
+      - name: Build
+        run: |
+          version="${GITHUB_SHA::12}"
+          mkdir -p dist
+          for target in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64; do
+            os="${target%/*}"; arch="${target#*/}"
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath \
+              -ldflags "-s -w -X github.com/usuario/sessions/internal/version.Version=${version}" \
+              -o "dist/sessions_${os}_${arch}" ./cmd/sessions
+          done
+          mkdir -p meta
+          echo "$version" > meta/VERSION
+          cp deploy/install.sh deploy/install-timer.sh deploy/install-health-timer.sh dist/
+          ls -l dist meta
+
+      # VERSION goes up last. install.sh trusts VERSION only when the binary it
+      # downloads reports the same version, so a half-replaced release is refused,
+      # never installed.
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(cat meta/VERSION)"
+          git tag -f latest "$GITHUB_SHA"
+          git push -f origin refs/tags/latest
+          if ! gh release view latest >/dev/null 2>&1; then
+            gh release create latest --title "latest (${version})" --notes "Built from ${GITHUB_SHA}." --latest
+          fi
+          gh release upload latest dist/* --clobber
+          gh release upload latest meta/VERSION --clobber
+          gh release edit latest --title "latest (${version})" --notes "Built from ${GITHUB_SHA}."

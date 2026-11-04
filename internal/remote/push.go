@@ -39,10 +39,16 @@ const addOwnershipSQL = `INSERT INTO session_machines(source,id,machine) VALUES(
 const removeOwnershipSQL = `DELETE FROM session_machines WHERE machine=$1 AND source=$2 AND id=$3`
 const deleteOrphanSQL = `DELETE FROM sessions AS s WHERE s.source=$1 AND s.id=$2 AND NOT EXISTS (SELECT 1 FROM session_machines m WHERE m.source=s.source AND m.id=s.id)`
 
+// Verifier re-checks a row right before it is uploaded. A false result skips the
+// row and blocks deletes for this push.
+type Verifier func(store.ExportRow) bool
+
 // Push upserts cleaned rows for this machine and deletes rows this machine no longer has.
 // allowDelete stays false when a local clean pass failed, so a transient failure cannot
-// remove an existing cloud copy.
-func Push(ctx context.Context, rows []store.ExportRow, fingerprint, machine string, allowDelete bool) (Stats, error) {
+// remove an existing cloud copy. verify, when set, runs only on rows that will be
+// uploaded: an unchanged row was verified when it was uploaded under the same
+// clean fingerprint, and re-checking all of them cost most of a no-change push.
+func Push(ctx context.Context, rows []store.ExportRow, fingerprint, machine string, allowDelete bool, verify Verifier) (Stats, error) {
 	if err := CheckFingerprint(fingerprint); err != nil {
 		return Stats{}, err
 	}
@@ -71,7 +77,7 @@ func Push(ctx context.Context, rows []store.ExportRow, fingerprint, machine stri
 	if err := migrate(ctx, tx); err != nil {
 		return Stats{}, err
 	}
-	stats, err := syncRows(ctx, tx, rows, fingerprint, machine, allowDelete)
+	stats, err := syncRowsVerified(ctx, tx, rows, fingerprint, machine, allowDelete, verify)
 	if err != nil {
 		return stats, err
 	}
@@ -82,18 +88,46 @@ func Push(ctx context.Context, rows []store.ExportRow, fingerprint, machine stri
 }
 
 func syncRows(ctx context.Context, db conn, rows []store.ExportRow, fingerprint, machine string, allowDelete bool) (Stats, error) {
+	return syncRowsVerified(ctx, db, rows, fingerprint, machine, allowDelete, nil)
+}
+
+func syncRowsVerified(ctx context.Context, db conn, rows []store.ExportRow, fingerprint, machine string, allowDelete bool, verify Verifier) (Stats, error) {
 	remoteRows, err := loadRemote(ctx, db, machine)
 	if err != nil {
 		return Stats{}, err
 	}
-	local := make([]Row, 0, len(rows))
+	all := make([]Row, 0, len(rows))
 	byKey := map[string]store.ExportRow{}
 	for _, row := range rows {
 		item := Row{Source: row.Source, ID: row.ID, Revision: row.Revision, Fingerprint: fingerprint}
-		local = append(local, item)
+		all = append(all, item)
 		byKey[key(item)] = row
 	}
-	decision := planSync(local, remoteRows, false)
+	planned := planSync(all, remoteRows, false).upsert
+	var stats Stats
+	failed := map[string]bool{}
+	var toUpload []Row
+	for _, item := range planned {
+		if verify != nil && !verify(byKey[key(item)]) {
+			failed[key(item)] = true
+			stats.Failed++
+			stats.SkippedPaths = append(stats.SkippedPaths, byKey[key(item)].Path)
+			continue
+		}
+		toUpload = append(toUpload, item)
+	}
+	// A row that failed verification is treated as absent, as before: it is not
+	// uploaded or claimed, and the failure blocks deletes for this push.
+	local := all
+	if len(failed) > 0 {
+		allowDelete = false
+		local = make([]Row, 0, len(all))
+		for _, item := range all {
+			if !failed[key(item)] {
+				local = append(local, item)
+			}
+		}
+	}
 	owned := make([]Row, 0)
 	for _, row := range remoteRows {
 		if row.Owned {
@@ -101,32 +135,48 @@ func syncRows(ctx context.Context, db conn, rows []store.ExportRow, fingerprint,
 		}
 	}
 	removals := planSync(local, owned, allowDelete).remove
-	var stats Stats
-	stats.Unchanged = len(rows) - len(decision.upsert)
-	for _, item := range decision.upsert {
-		row := byKey[key(item)]
-		if err := upsert(ctx, db, row, machine, fingerprint); err != nil {
+	stats.Unchanged = len(local) - len(toUpload)
+	upserts := make([][]any, 0, len(toUpload))
+	for _, item := range toUpload {
+		args, err := upsertArgs(byKey[key(item)], machine, fingerprint)
+		if err != nil {
 			return stats, err
 		}
-		stats.Uploaded++
+		upserts = append(upserts, args)
 	}
+	if _, err := execAll(ctx, db, "upsert", upsertSQL, upserts, upsertChunk); err != nil {
+		return stats, err
+	}
+	stats.Uploaded = len(upserts)
 
-	// An unchanged shared chat still belongs to this machine.
+	// An unchanged shared chat still belongs to this machine. Rows it already owns
+	// are skipped, so a push with no changes writes nothing here.
+	ownedKeys := make(map[string]bool, len(owned))
+	for _, row := range owned {
+		ownedKeys[key(row)] = true
+	}
+	var adds [][]any
 	for _, item := range local {
-		if _, err := db.Exec(ctx, addOwnershipSQL, item.Source, item.ID, machine); err != nil {
-			return stats, sqlError("ownership", err)
+		if !ownedKeys[key(item)] {
+			adds = append(adds, []any{item.Source, item.ID, machine})
 		}
 	}
+	if _, err := execAll(ctx, db, "ownership", addOwnershipSQL, adds, ownershipChunk); err != nil {
+		return stats, err
+	}
+	var releases, orphans [][]any
 	for _, item := range removals {
-		if _, err := db.Exec(ctx, removeOwnershipSQL, machine, item.Source, item.ID); err != nil {
-			return stats, sqlError("ownership", err)
-		}
-		tag, err := db.Exec(ctx, deleteOrphanSQL, item.Source, item.ID)
-		if err != nil {
-			return stats, sqlError("delete", err)
-		}
-		stats.Deleted += int(tag.RowsAffected())
+		releases = append(releases, []any{machine, item.Source, item.ID})
+		orphans = append(orphans, []any{item.Source, item.ID})
 	}
+	if _, err := execAll(ctx, db, "ownership", removeOwnershipSQL, releases, ownershipChunk); err != nil {
+		return stats, err
+	}
+	deleted, err := execAll(ctx, db, "delete", deleteOrphanSQL, orphans, ownershipChunk)
+	if err != nil {
+		return stats, err
+	}
+	stats.Deleted = int(deleted)
 	return stats, nil
 }
 
@@ -158,16 +208,21 @@ func loadRemote(ctx context.Context, db conn, machine string) ([]Row, error) {
 }
 
 func upsert(ctx context.Context, db conn, row store.ExportRow, machine, fingerprint string) error {
+	args, err := upsertArgs(row, machine, fingerprint)
+	if err != nil {
+		return err
+	}
+	_, err = execAll(ctx, db, "upsert", upsertSQL, [][]any{args}, 1)
+	return err
+}
+
+func upsertArgs(row store.ExportRow, machine, fingerprint string) ([]any, error) {
 	payload, err := json.Marshal(turnsOf(row))
 	if err != nil {
-		return errors.New("upsert failed")
+		return nil, errors.New("upsert failed")
 	}
-	_, err = db.Exec(ctx, upsertSQL,
+	return []any{
 		row.Source, row.ID, machine, row.Provider, row.ProviderSessionID, row.CWD, row.Title, row.Path, row.OriginPath,
 		row.Revision, fingerprint, parseTime(row.StartedAt), parseTime(row.UpdatedAt), row.Body, payload,
-	)
-	if err != nil {
-		return sqlError("upsert", err)
-	}
-	return nil
+	}, nil
 }
