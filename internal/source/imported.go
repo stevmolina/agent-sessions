@@ -89,24 +89,47 @@ func (Imports) Discover() ([]Candidate, error) {
 	return out, nil
 }
 
+// ErrSkipped marks a session the index leaves out on purpose. It is not a
+// failure: retrying will not fix it, so it must not block deletes or fail
+// every push.
+var ErrSkipped = errors.New("skipped")
+
+// SkipError says which file was set aside and why.
+type SkipError struct{ Path, Reason string }
+
+func (e *SkipError) Error() string        { return e.Path + ": " + e.Reason }
+func (e *SkipError) Is(target error) bool { return target == ErrSkipped }
+
+// quarantine moves an unusable import out of the way as <name>.bad, so later
+// runs do not trip on it. The file is kept for a person to look at.
+func quarantine(path, why string) error {
+	if err := os.Rename(path, path+".bad"); err != nil {
+		return &SkipError{Path: path, Reason: why + " (could not move it aside)"}
+	}
+	return &SkipError{Path: path, Reason: why + ", moved to " + filepath.Base(path) + ".bad"}
+}
+
 func (Imports) Load(c Candidate) (*model.Session, error) {
 	if !isImportSource(c.Source) {
 		return nil, fmt.Errorf("unknown source: %s", c.Source)
 	}
 	info, err := os.Stat(c.OriginPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, &SkipError{Path: c.OriginPath, Reason: "removed while indexing"}
+	}
 	if err != nil {
-		return nil, err
+		return nil, quarantine(c.OriginPath, "unreadable")
 	}
 	raw, err := os.ReadFile(c.OriginPath)
 	if err != nil {
-		return nil, err
+		return nil, quarantine(c.OriginPath, "unreadable")
 	}
 	var conv Imported
 	if err := json.Unmarshal(raw, &conv); err != nil {
-		return nil, fmt.Errorf("imported conversation unreadable: %s", c.OriginPath)
+		return nil, quarantine(c.OriginPath, "not a stored conversation")
 	}
 	if conv.Source != c.Source || strings.TrimSpace(conv.ID) == "" {
-		return nil, fmt.Errorf("imported conversation does not match its folder: %s", c.OriginPath)
+		return nil, quarantine(c.OriginPath, "does not match its folder")
 	}
 	mtime := float64(info.ModTime().Unix()) + float64(info.ModTime().Nanosecond())/1e9
 	s := &model.Session{

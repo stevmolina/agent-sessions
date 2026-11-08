@@ -19,7 +19,10 @@ type Cleaner interface {
 
 type Stats struct {
 	Upserted, Unchanged, Deleted, Failed int
-	Warnings                             []string
+	// Skipped are sessions a source set aside on purpose (source.ErrSkipped).
+	// Unlike Failed they do not block deletes or fail the run.
+	Skipped  int
+	Warnings []string
 }
 
 func Refresh(db *sql.DB, cleaner Cleaner) (Stats, error) {
@@ -74,6 +77,16 @@ func refresh(db *sql.DB, cleaner Cleaner, adapters []source.SourceAdapter) (Stat
 				continue
 			}
 			s, err := adapter.Load(item)
+			if errors.Is(err, source.ErrSkipped) {
+				stats.Skipped++
+				stats.Warnings = append(stats.Warnings, "skipped "+err.Error())
+				if exists {
+					if err := store.Delete(tx, item.Locator); err != nil {
+						return stats, err
+					}
+				}
+				continue
+			}
 			if err != nil {
 				stats.Failed++
 				stats.Warnings = append(stats.Warnings, "redaction failed, skipped "+item.Locator)

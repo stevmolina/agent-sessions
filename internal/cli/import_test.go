@@ -89,3 +89,38 @@ func TestImportRejectsBadInput(t *testing.T) {
 		t.Fatalf("unknown flag should be a usage error, got %d", code)
 	}
 }
+
+// A broken file under the imports folder is moved aside and skipped. It must
+// not count as a failure, which would fail every push and block deletes.
+func TestBrokenImportIsQuarantined(t *testing.T) {
+	installFixtures(t)
+	dir := t.TempDir()
+	export := filepath.Join(dir, "export.zip")
+	writeZip(t, export, map[string]string{
+		"conversations.json": `[{"uuid": "conv-broken-1", "name": "x", "chat_messages": [{"sender": "human", "text": "teal-comet-905"}]}]`,
+	})
+	if code, _, stderr := run("import", export); code != 0 {
+		t.Fatalf("import: %s", stderr)
+	}
+	if code, stdout, _ := run("search", "teal-comet-905"); code != 0 || !strings.Contains(stdout, "conv-broken-1") {
+		t.Fatalf("search: %q", stdout)
+	}
+	stored := filepath.Join(os.Getenv("SESSIONS_IMPORTS_ROOT"), "claude-ai", "conv-broken-1.json")
+	if err := os.WriteFile(stored, []byte("{not json, and a different size"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, _, stderr := run("index")
+	if code != 0 || !strings.Contains(stderr, "0 failed\n") || !strings.Contains(stderr, "skipped "+stored+": not a stored conversation, moved to conv-broken-1.json.bad") {
+		t.Fatalf("index: code=%d stderr=%q", code, stderr)
+	}
+	if _, err := os.Stat(stored + ".bad"); err != nil {
+		t.Fatal("broken file was not kept aside")
+	}
+	if code, stdout, _ := run("search", "teal-comet-905"); code != 0 || stdout != "no matches\n" {
+		t.Fatalf("broken import still indexed: %q", stdout)
+	}
+	// The next run is clean: nothing left to trip on.
+	if code, _, stderr := run("index"); code != 0 || strings.Contains(stderr, "skipped") {
+		t.Fatalf("second index: code=%d stderr=%q", code, stderr)
+	}
+}
