@@ -44,7 +44,7 @@ sessions mcp
 
 `index` and `search` redact secrets into the local index before storing text. Transcript files are left unchanged, and local `show` still prints the raw file. `push` uploads the cleaned index. See [docs/remote-sync.md](docs/remote-sync.md).
 
-`mcp` serves the cleaned Postgres copy over streamable HTTP for Claude connectors. Its `search` and `show` tools use the same remote queries as the CLI. WorkOS AuthKit handles login, and the server accepts only the configured user's tokens. See the [access setup](docs/remote-sync.md#access) for environment variables and connection instructions.
+Reading your sessions from Claude, ChatGPT or another AI moved into Agent Brain. Connect `https://brain.mcpbox.dev/mcp` and use its `search_sessions` and `show_session` tools; it reads the same pushed table and shows each person only their own rows. `sessions mcp` now only serves the public pages and `/healthz`, and answers `/mcp` with 410 Gone and the new address. See [Access](docs/remote-sync.md#access).
 
 ## Owner and brain
 
