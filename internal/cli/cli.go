@@ -51,7 +51,9 @@ positional arguments:
                        export zips.
     health             Show each machine's last push and flag problems.
     version            Print the build version.
-    mcp                Serve authenticated remote search over HTTP.
+    mcp                Serve the public pages. The MCP tools moved to
+                       Agent Brain (https://brain.mcpbox.dev/mcp); /mcp
+                       answers 410 Gone with that address.
 
 options:
   -h, --help           show this help message and exit

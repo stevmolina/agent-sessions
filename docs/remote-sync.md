@@ -60,34 +60,18 @@ Pushing also needs `doppler login` on the machine. Without it every attempt fail
 
 ## Access
 
-`sessions mcp` serves two read-only tools over streamable HTTP at `/mcp`:
-
-- `search`: `query`, optional `source`, `provider`, `all_copies`, and `limit`. The default limit is 20. Like the CLI's remote search, it returns stored copies without local duplicate collapse, so `all_copies` does not change remote results.
-- `show`: `id`, accepting a session ID, `source:id`, or a path locator. Ambiguous IDs require a source or locator. The response contains cleaned turns, with the same output limit as `show --remote`.
-
-The server uses only `DATABASE_URL_READONLY`. It requires that URL in its environment and does not fetch Doppler secrets, refresh an index, apply the schema, or upload transcripts. The deployed application receives only the read-only DB URL and auth configuration.
-
-Create the reader through SQL, then grant schema usage and table SELECT. [Neon Console, CLI, and API roles inherit `neon_superuser`](https://neon.com/docs/manage/roles), which can permit writes despite an explicit SELECT-only table grant. Verify effective write privileges before deploying. The read-only URL uses the restricted SQL role in both Doppler configs and Dokploy.
-
-Required environment variables, names only:
-
-| Variable | Purpose |
-|---|---|
-| `DATABASE_URL_READONLY` | Postgres URL for the SELECT-only role |
-| `AUTHKIT_ISSUER` | WorkOS AuthKit authorization server issuer |
-| `WORKOS_ALLOWED_USER_ID` | The only WorkOS subject permitted to use the tools |
-| `MCP_RESOURCE_URL` | Public HTTPS URL of the `/mcp` resource |
-
-Optional `PORT` defaults to `8080`, and `BIND_HOST` defaults to `0.0.0.0`. Store auth configuration in Doppler project `sessions`, configs `dev` and `prd`, and mirror the runtime values into Dokploy. Do not supply `DATABASE_URL` or a WorkOS API key to the deployed server.
-
-WorkOS issues tokens. The server checks AuthKit's authorization server metadata issuer, the JWT signature against its JWKS, and the token's issuer, resource audience, expiration, and allowed subject. Token failures return 401 with an `invalid_token` bearer challenge and a link to `/.well-known/oauth-protected-resource`. That public metadata points clients at AuthKit. `/healthz` is public liveness only and never queries Neon, allowing the database to autosuspend.
-
-Before connecting a client, enable Client ID Metadata Document support in WorkOS Connect configuration. Enable Dynamic Client Registration as well if an older MCP client needs it. Add the public MCP resource URL as a Resource Indicator. See the [AuthKit MCP setup](https://workos.com/docs/authkit/mcp) for client registration details. In claude.ai, add a custom connector using that URL and sign in. Claude Code can connect with:
+The MCP endpoint moved into Agent Brain. Connect `https://brain.mcpbox.dev/mcp` in claude.ai, Claude Code or another client and sign in there; its `search_sessions` and `show_session` tools read this same `sessions` table as the `brain_mcp` role and filter by `owner`. Claude Code:
 
 ```bash
-claude mcp add --transport http sessions https://sessions.mcpbox.dev/mcp
+claude mcp add --transport http brain https://brain.mcpbox.dev/mcp
 ```
 
-Authenticate through `/mcp` in Claude Code, then run one `search` and one `show`. The Claude phone app can use the connector added to the same claude.ai account.
+A client still pointed at the old `https://sessions.mcpbox.dev/mcp` gets 410 Gone with this JSON body, and so do `/.well-known/oauth-protected-resource` and anything under it:
 
-The Docker image runs `sessions mcp` as a non-root user. Deploy it with a 512 MiB memory cap. Its health check calls `/healthz` only. Keep secrets in Doppler and Dokploy, outside the image and repository.
+```json
+{"error":"moved","message":"The sessions MCP moved into Agent Brain. Use https://brain.mcpbox.dev/mcp (tools search_sessions, show_session).","url":"https://brain.mcpbox.dev/mcp"}
+```
+
+`sessions mcp` keeps running on Dokploy for that answer, the public landing pages and `/healthz`. It reads no database and needs no secrets: only optional `PORT` (default `8080`) and `BIND_HOST` (default `0.0.0.0`). `AUTHKIT_ISSUER`, `WORKOS_ALLOWED_USER_ID`, `MCP_RESOURCE_URL` and `DATABASE_URL_READONLY` can be removed from the Dokploy app. The Docker image runs it as a non-root user with a 512 MiB memory cap, and its health check calls `/healthz` only.
+
+`sessions search --remote` and `show --remote` on the command line still read the Postgres copy with `DATABASE_URL_READONLY` from Doppler.
