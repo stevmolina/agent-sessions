@@ -2,7 +2,7 @@
 
 Search local coding-agent transcripts from the command line.
 
-The index covers native Cursor, Claude Code, and Codex JSONL files, plus T3 Code threads from `state.sqlite`. T3 is an extra entry point, not a replacement for those native files.
+The index covers native Cursor, Claude Code, and Codex JSONL files, plus T3 Code threads from `state.sqlite`. T3 is an extra entry point, not a replacement for those native files. Conversations from ChatGPT, Claude.ai and Grok can be added from their data exports with `sessions import`.
 
 ## Install
 
@@ -28,6 +28,7 @@ sessions search "query"
 sessions show SOURCE:ID
 sessions push
 sessions push --trigger
+sessions import EXPORT.zip... [--push]
 sessions health
 sessions version
 sessions search "query" --remote
@@ -37,11 +38,54 @@ sessions mcp
 
 `push --trigger` is for agent hooks. It returns at once and pushes in the background. One push runs per machine; a request made during a push makes that push run once more. `health` prints each machine's last push from the shared database and flags a machine whose last attempt failed or that has not pushed in 24 hours. See [docs/remote-sync.md](docs/remote-sync.md#keeping-it-running).
 
+`push` needs `SESSIONS_OWNER` and files each session under a brain; see [Owner and brain](#owner-and-brain).
+
 `search` refreshes stale sources first. You do not need `index` unless you want a refresh without searching. `search --remote` and `show --remote` read the Postgres copy and do not refresh.
 
 `index` and `search` redact secrets into the local index before storing text. Transcript files are left unchanged, and local `show` still prints the raw file. `push` uploads the cleaned index. See [docs/remote-sync.md](docs/remote-sync.md).
 
 `mcp` serves the cleaned Postgres copy over streamable HTTP for Claude connectors. Its `search` and `show` tools use the same remote queries as the CLI. WorkOS AuthKit handles login, and the server accepts only the configured user's tokens. See the [access setup](docs/remote-sync.md#access) for environment variables and connection instructions.
+
+## Owner and brain
+
+Every row `push` writes carries two tags, so a reader such as brain-mcp can show each person only their own sessions, filtered by project.
+
+- `owner` is the WorkOS user id of the person pushing. `push` reads `SESSIONS_OWNER` from the environment, else from Doppler project `sessions` (config `dev`, or `SESSIONS_DOPPLER_CONFIG`). Without it `push` stops with an error naming `SESSIONS_OWNER`. Other commands do not need it.
+- `brain` is the knowledge repo (`owner/repo`) a session belongs to, picked from its working folder by a map at `$SESSIONS_BRAINS_FILE`, else `~/.config/sessions/brains.json`:
+
+```json
+{
+  "default": "someone/personal-brain",
+  "rules": [
+    {"brain": "someone/client-knowledge", "match": ["engagements/client", "worktrees/client-*"]}
+  ]
+}
+```
+
+The first rule with a matching pattern wins. A pattern matches whole folder names anywhere in the path: `engagements/client` matches `/home/me/dev/engagements/client/app` but not `.../engagements/client2`. A pattern ending in `*` matches any folder name that starts with it: `worktrees/client-*` matches `.../worktrees/client-fix-login`. Patterns are relative (no leading `/`), and `\` counts as `/`. A session with no folder (imports) or no match gets `default`; with no default, or no file at all, the brain is empty. A malformed file stops `push`.
+
+Change the map and the next push retags the affected rows in place without uploading them again. The push summary counts them: `0 uploaded, 812 unchanged (40 retagged), ...`.
+
+## Import chat exports
+
+```bash
+sessions import ~/Downloads/chatgpt-export.zip ~/Downloads/claude-export.zip
+sessions import ~/Downloads/grok-export.zip --push
+```
+
+The format is detected from the zip. Each conversation becomes one session with source and provider `chatgpt`, `claude-ai` or `grok`, keyed by the app's own conversation id, so importing a newer export updates the same sessions instead of adding copies. Only user and assistant text is kept. For ChatGPT, the branch you last saw is kept and edited or regenerated branches are dropped; Grok branches are handled the same way.
+
+Conversations are stored as one JSON file each under `~/.local/share/sessions/imports/<source>/` (`SESSIONS_IMPORTS_ROOT`). The normal `index` and `push` read them, so they are redacted like every other session before anything is uploaded. Keep that folder: a push uploads what is in it and removes from the shared copy what is no longer there. `--push` pushes right away; otherwise the next push (timer or hook) uploads them.
+
+Where to request an export (each app emails a download link):
+
+| App | Where |
+|---|---|
+| ChatGPT | Settings > Data controls > Export data |
+| Claude.ai | Settings > Privacy > Export data (web or desktop, not the mobile apps) |
+| Grok | accounts.x.ai/data, also reachable from grok.com Settings > Data controls |
+
+The zip is treated as untrusted: it is read in memory, file names inside it are never used as paths, and reading stops past 1 GiB for one file or 2 GiB in total.
 
 ## Source vs provider
 
@@ -55,6 +99,9 @@ sessions mcp
 | T3 thread using Codex | `t3code` | `codex` |
 | T3 thread using Claude | `t3code` | `claude` |
 | T3 thread using Cursor | `t3code` | `cursor` |
+| Imported ChatGPT export | `chatgpt` | `chatgpt` |
+| Imported Claude.ai export | `claude-ai` | `claude-ai` |
+| Imported Grok export | `grok` | `grok` |
 
 ```bash
 sessions search "query" --source codex
@@ -97,6 +144,8 @@ T3 often has a native Codex/Claude/Cursor transcript for the same turn. When `pr
 | `SESSIONS_CODEX_ROOT` | `~/.codex/sessions` |
 | `SESSIONS_CODEX_ARCHIVE_ROOT` | `~/.codex/archived_sessions` |
 | `SESSIONS_T3_ROOT` | `~/.t3/userdata` |
+| `SESSIONS_IMPORTS_ROOT` | `~/.local/share/sessions/imports` |
+| `SESSIONS_BRAINS_FILE` | `~/.config/sessions/brains.json` |
 
 `SESSIONS_T3_ROOT` may be the userdata directory or a `state.sqlite` file. The adapter reads that database and does not write to it.
 
