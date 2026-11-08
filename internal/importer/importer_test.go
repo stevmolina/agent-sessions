@@ -266,9 +266,9 @@ func TestOversizedEntryRefused(t *testing.T) {
 }
 
 func parseConversationsLimited(body string, max int64) (Result, error) {
-	var res Result
+	c := &collector{emit: func(source.Imported) error { return nil }}
 	r := &limitedReader{r: strings.NewReader(body), max: max, name: "conversations.json", budget: &budget{}}
-	return res, parseConversations(r, &res)
+	return Result{}, parseConversations(r, c)
 }
 
 func TestNotAnExport(t *testing.T) {
@@ -305,5 +305,25 @@ func TestStoreIsIdempotent(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(filepath.Join(root, source.SourceChatGPT)); len(entries) != 1 {
 		t.Fatalf("re-import should overwrite in place, found %d files", len(entries))
+	}
+}
+
+func TestImportZipStoresWhileParsing(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "export.zip")
+	if err := os.WriteFile(file, buildZip(t, entry{"conversations.json", chatgptExport}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(dir, "imports")
+	got, err := ImportZip(file, root, DefaultLimits)
+	if err != nil || len(got) != 1 || got[0].Source != source.SourceChatGPT || got[0].Imported != 1 || got[0].Skipped != 2 {
+		t.Fatalf("got=%+v err=%v", got, err)
+	}
+	again, err := ImportZip(file, root, DefaultLimits)
+	if err != nil || again[0].Imported != 0 || again[0].Unchanged != 1 {
+		t.Fatalf("again=%+v err=%v", again, err)
+	}
+	if DefaultLimits.MaxEntry != 512<<20 || DefaultLimits.MaxTotal != 2<<30 {
+		t.Fatalf("limits %+v", DefaultLimits)
 	}
 }

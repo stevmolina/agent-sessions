@@ -642,13 +642,7 @@ func importCmd(args []string, out, errOut io.Writer) int {
 	var total []importer.Summary
 	failed := false
 	for _, file := range files {
-		res, err := importer.ReadZip(file, importer.DefaultLimits)
-		if err != nil {
-			fmt.Fprintf(errOut, "%s: %v\n", file, err)
-			failed = true
-			continue
-		}
-		summary, err := importer.Store(root, res)
+		summary, err := importer.ImportZip(file, root, importer.DefaultLimits)
 		total = importer.Merge(total, summary)
 		if err != nil {
 			fmt.Fprintf(errOut, "%s: %v\n", file, err)

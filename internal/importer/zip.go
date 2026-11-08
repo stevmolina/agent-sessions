@@ -17,13 +17,14 @@ import (
 )
 
 // Limits caps how much one zip may decompress. Exports with years of history
-// run to a few hundred megabytes of JSON, so the defaults leave room.
+// run to a few hundred megabytes of JSON, so the defaults leave room. JSON is
+// streamed, so memory follows the largest single conversation, not the file.
 type Limits struct {
 	MaxEntry int64 // bytes read from one entry
 	MaxTotal int64 // bytes read from all entries of one zip
 }
 
-var DefaultLimits = Limits{MaxEntry: 1 << 30, MaxTotal: 2 << 30}
+var DefaultLimits = Limits{MaxEntry: 512 << 20, MaxTotal: 2 << 30}
 
 // Result is what one zip held.
 type Result struct {
@@ -33,11 +34,17 @@ type Result struct {
 	Skipped map[string]int
 }
 
-func (r *Result) skip(src string) {
-	if r.Skipped == nil {
-		r.Skipped = map[string]int{}
+// collector receives conversations as they are parsed.
+type collector struct {
+	emit    func(source.Imported) error
+	skipped map[string]int
+}
+
+func (c *collector) skip(src string) {
+	if c.skipped == nil {
+		c.skipped = map[string]int{}
 	}
-	r.Skipped[src]++
+	c.skipped[src]++
 }
 
 // ErrNoExport means the zip held none of the files a supported export has.
@@ -56,14 +63,15 @@ func entryKind(name string) string {
 	return ""
 }
 
-// ReadZip parses every conversation in one export zip.
+// ReadZip parses every conversation in one export zip and returns them all.
+// ImportZip stores them as they are parsed instead.
 func ReadZip(file string, lim Limits) (Result, error) {
-	zr, err := zip.OpenReader(file)
-	if err != nil && !(errors.Is(err, zip.ErrInsecurePath) && zr != nil) {
-		return Result{}, fmt.Errorf("%s: not a readable zip", file)
+	zr, err := openZip(file)
+	if err != nil {
+		return Result{}, err
 	}
 	defer zr.Close()
-	return readZip(&zr.Reader, lim)
+	return collect(&zr.Reader, lim)
 }
 
 // ReadZipFrom parses an export zip held in a ReaderAt (tests, or a download).
@@ -72,11 +80,29 @@ func ReadZipFrom(r io.ReaderAt, size int64, lim Limits) (Result, error) {
 	if err != nil && !(errors.Is(err, zip.ErrInsecurePath) && zr != nil) {
 		return Result{}, errors.New("not a readable zip")
 	}
-	return readZip(zr, lim)
+	return collect(zr, lim)
 }
 
-func readZip(zr *zip.Reader, lim Limits) (Result, error) {
+func openZip(file string) (*zip.ReadCloser, error) {
+	zr, err := zip.OpenReader(file)
+	if err != nil && !(errors.Is(err, zip.ErrInsecurePath) && zr != nil) {
+		return nil, fmt.Errorf("%s: not a readable zip", file)
+	}
+	return zr, nil
+}
+
+func collect(zr *zip.Reader, lim Limits) (Result, error) {
 	var res Result
+	c := &collector{emit: func(conv source.Imported) error {
+		res.Conversations = append(res.Conversations, conv)
+		return nil
+	}}
+	err := readZip(zr, lim, c)
+	res.Skipped = c.skipped
+	return res, err
+}
+
+func readZip(zr *zip.Reader, lim Limits, c *collector) error {
 	b := &budget{max: lim.MaxTotal}
 	found := false
 	for _, f := range zr.File {
@@ -89,32 +115,32 @@ func readZip(zr *zip.Reader, lim Limits) (Result, error) {
 		}
 		found = true
 		if lim.MaxEntry > 0 && f.UncompressedSize64 > uint64(lim.MaxEntry) {
-			return res, fmt.Errorf("%s is larger than the %d byte limit", path.Base(f.Name), lim.MaxEntry)
+			return fmt.Errorf("%s is larger than the %d byte limit", path.Base(f.Name), lim.MaxEntry)
 		}
 		rc, err := f.Open()
 		if err != nil {
-			return res, fmt.Errorf("%s: %w", path.Base(f.Name), err)
+			return fmt.Errorf("%s: %w", path.Base(f.Name), err)
 		}
 		r := &limitedReader{r: rc, max: lim.MaxEntry, name: path.Base(f.Name), budget: b}
 		switch kind {
 		case "conversations":
-			err = parseConversations(r, &res)
+			err = parseConversations(r, c)
 		case "grok":
-			err = parseGrok(r, &res)
+			err = parseGrok(r, c)
 		}
 		rc.Close()
 		if err != nil {
 			var tooBig *limitError
 			if errors.As(err, &tooBig) {
-				return res, tooBig
+				return tooBig
 			}
-			return res, fmt.Errorf("%s: %w", path.Base(f.Name), err)
+			return fmt.Errorf("%s: %w", path.Base(f.Name), err)
 		}
 	}
 	if !found {
-		return res, ErrNoExport
+		return ErrNoExport
 	}
-	return res, nil
+	return nil
 }
 
 type budget struct{ used, max int64 }

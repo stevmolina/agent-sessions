@@ -15,7 +15,7 @@ import (
 )
 
 // eachElement streams a JSON array, so a large export is never held whole.
-func eachElement(dec *json.Decoder, fn func(json.RawMessage)) error {
+func eachElement(dec *json.Decoder, fn func(json.RawMessage) error) error {
 	tok, err := dec.Token()
 	if err != nil {
 		return err
@@ -28,7 +28,9 @@ func eachElement(dec *json.Decoder, fn func(json.RawMessage)) error {
 		if err := dec.Decode(&raw); err != nil {
 			return err
 		}
-		fn(raw)
+		if err := fn(raw); err != nil {
+			return err
+		}
 	}
 	_, err = dec.Token()
 	return err
@@ -36,27 +38,27 @@ func eachElement(dec *json.Decoder, fn func(json.RawMessage)) error {
 
 // parseConversations reads a conversations.json. ChatGPT and Claude.ai both
 // use that name, so each item is told apart by its fields.
-func parseConversations(r io.Reader, res *Result) error {
-	return eachElement(json.NewDecoder(r), func(raw json.RawMessage) {
+func parseConversations(r io.Reader, c *collector) error {
+	return eachElement(json.NewDecoder(r), func(raw json.RawMessage) error {
 		var probe map[string]json.RawMessage
 		if json.Unmarshal(raw, &probe) != nil {
-			res.skip("unknown")
-			return
+			c.skip("unknown")
+			return nil
 		}
 		switch {
 		case probe["mapping"] != nil:
-			addParsed(res, source.SourceChatGPT, raw, parseChatGPT)
+			return addParsed(c, source.SourceChatGPT, raw, parseChatGPT)
 		case probe["chat_messages"] != nil || probe["uuid"] != nil:
-			addParsed(res, source.SourceClaudeAI, raw, parseClaudeAI)
-		default:
-			res.skip("unknown")
+			return addParsed(c, source.SourceClaudeAI, raw, parseClaudeAI)
 		}
+		c.skip("unknown")
+		return nil
 	})
 }
 
 // parseGrok reads prod-grok-backend.json: an object whose "conversations"
 // array holds {conversation, responses} items. Other keys are skipped.
-func parseGrok(r io.Reader, res *Result) error {
+func parseGrok(r io.Reader, c *collector) error {
 	dec := json.NewDecoder(r)
 	tok, err := dec.Token()
 	if err != nil {
@@ -71,8 +73,8 @@ func parseGrok(r io.Reader, res *Result) error {
 			return err
 		}
 		if key, _ := keyTok.(string); key == "conversations" {
-			if err := eachElement(dec, func(raw json.RawMessage) {
-				addParsed(res, source.SourceGrok, raw, parseGrokItem)
+			if err := eachElement(dec, func(raw json.RawMessage) error {
+				return addParsed(c, source.SourceGrok, raw, parseGrokItem)
 			}); err != nil {
 				return err
 			}
@@ -87,14 +89,14 @@ func parseGrok(r io.Reader, res *Result) error {
 	return err
 }
 
-func addParsed(res *Result, src string, raw json.RawMessage, parse func(json.RawMessage) (source.Imported, bool)) {
+func addParsed(c *collector, src string, raw json.RawMessage, parse func(json.RawMessage) (source.Imported, bool)) error {
 	conv, ok := parse(raw)
 	if !ok || strings.TrimSpace(conv.ID) == "" || len(conv.Turns) == 0 {
-		res.skip(src)
-		return
+		c.skip(src)
+		return nil
 	}
 	conv.Source = src
-	res.Conversations = append(res.Conversations, conv)
+	return c.emit(conv)
 }
 
 func addTurn(turns []model.Turn, role, text string) []model.Turn {

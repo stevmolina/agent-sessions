@@ -85,7 +85,7 @@ Where to request an export (each app emails a download link):
 | Claude.ai | Settings > Privacy > Export data (web or desktop, not the mobile apps) |
 | Grok | accounts.x.ai/data, also reachable from grok.com Settings > Data controls |
 
-The zip is treated as untrusted: it is read in memory, file names inside it are never used as paths, and reading stops past 1 GiB for one file or 2 GiB in total.
+The zip is treated as untrusted: it is read in memory, file names inside it are never used as paths, and reading stops past 512 MiB for one file or 2 GiB in total. Conversations are stored as they are read, so memory follows the largest conversation, not the whole export.
 
 ## Source vs provider
 
