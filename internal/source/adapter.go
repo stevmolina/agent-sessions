@@ -18,12 +18,15 @@ type SourceAdapter interface {
 }
 
 func Adapters() []SourceAdapter {
-	return []SourceAdapter{JSONL{}, T3{}}
+	return []SourceAdapter{JSONL{}, T3{}, Imports{}}
 }
 
 func AdapterFor(source string) SourceAdapter {
 	if source == "t3code" {
 		return T3{}
+	}
+	if isImportSource(source) {
+		return Imports{}
 	}
 	return JSONL{}
 }
