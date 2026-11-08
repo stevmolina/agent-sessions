@@ -2,9 +2,11 @@ package remote
 
 import "errors"
 
-// Row is one cleaned session ready to upload.
+// Row is one cleaned session ready to upload, or the state of one remote row.
+// Owner and Brain are read from the remote side only; "" stands for NULL.
 type Row struct {
 	Source, ID, Revision, Fingerprint string
+	Owner, Brain                      string
 	Owned                             bool
 }
 

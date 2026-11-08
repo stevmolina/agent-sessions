@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/usuario/sessions/internal/brainmap"
 	"github.com/usuario/sessions/internal/clean"
 	"github.com/usuario/sessions/internal/config"
 	"github.com/usuario/sessions/internal/health"
@@ -446,8 +447,8 @@ func pushOnce(errOut io.Writer) int {
 	if err != nil {
 		return fail(errOut, err)
 	}
-	fmt.Fprintf(errOut, "%d uploaded, %d unchanged, %d deleted, %d failed in %.1fs\n",
-		res.stats.Uploaded, res.stats.Unchanged, res.stats.Deleted, res.skipped, time.Since(start).Seconds())
+	fmt.Fprintf(errOut, "%d uploaded, %d unchanged (%d retagged), %d deleted, %d failed in %.1fs\n",
+		res.stats.Uploaded, res.stats.Unchanged, res.stats.Retagged, res.stats.Deleted, res.skipped, time.Since(start).Seconds())
 	if res.skipped > 0 {
 		return 1
 	}
@@ -474,8 +475,31 @@ type publicError struct {
 func (e publicError) Error() string { return e.err.Error() }
 func (e publicError) Unwrap() error { return e.err }
 
+// pushTags reads who is pushing and the folder-to-brain map. Both are checked
+// before the slow refresh, so a missing owner fails in a second.
+func pushTags(ctx context.Context) (string, *brainmap.Map, error) {
+	owner, err := remote.Secret(ctx, "SESSIONS_OWNER")
+	if err != nil || owner == "" {
+		return "", nil, publicError{
+			public: "SESSIONS_OWNER is not set (env or Doppler project sessions)",
+			err:    errors.New("push needs SESSIONS_OWNER, your WorkOS user id: set it in the environment or in Doppler project sessions"),
+		}
+	}
+	brains, err := brainmap.Load()
+	if err != nil {
+		return "", nil, publicError{public: "the brain map could not be read", err: err}
+	}
+	return owner, brains, nil
+}
+
 func runPush(errOut io.Writer) (pushResult, error) {
 	var res pushResult
+	tagCtx, tagCancel := context.WithTimeout(context.Background(), time.Minute)
+	owner, brains, err := pushTags(tagCtx)
+	tagCancel()
+	if err != nil {
+		return res, err
+	}
 	db, cleaner, err := openIndex()
 	if err != nil {
 		return res, publicError{public: "could not open the index or read redaction secrets from Doppler (is doppler logged in?)", err: err}
@@ -511,7 +535,14 @@ func runPush(errOut io.Writer) (pushResult, error) {
 	}
 	// Each row about to be uploaded must still redact to itself.
 	verify := func(row store.ExportRow) bool { return rowStillClean(checker, row) }
-	res.stats, err = remote.Push(ctx, rows, fingerprint, machine, stats.Failed == 0, verify)
+	res.stats, err = remote.Push(ctx, rows, remote.Options{
+		Fingerprint: fingerprint,
+		Machine:     machine,
+		AllowDelete: stats.Failed == 0,
+		Verify:      verify,
+		Owner:       owner,
+		Brains:      brains,
+	})
 	for _, path := range res.stats.SkippedPaths {
 		fmt.Fprintln(errOut, "redaction failed, skipped "+path)
 	}

@@ -19,11 +19,14 @@ var schemaFS embed.FS
 var requiredColumns = []string{
 	"source", "id", "machine", "provider", "provider_session_id", "cwd", "title",
 	"path", "origin_path", "revision", "clean_fingerprint", "started_at", "updated_at",
-	"body", "turns", "pushed_at", "search",
+	"body", "turns", "pushed_at", "search", "owner", "brain",
 }
 
 type Stats struct {
 	Uploaded, Unchanged, Deleted, Failed int
+	// Retagged are unchanged rows whose owner or brain was rewritten. They are
+	// also counted in Unchanged, since their content was not uploaded again.
+	Retagged int
 	// SkippedPaths are rows that failed the pre-upload verification.
 	SkippedPaths []string
 }

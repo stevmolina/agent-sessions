@@ -34,7 +34,7 @@ func TestRemoteRoundTrip(t *testing.T) {
 		_, _ = db.Exec(context.Background(), `DELETE FROM session_machines WHERE id = $1`, row.ID)
 		_, _ = db.Exec(context.Background(), `DELETE FROM sessions WHERE id = $1`, row.ID)
 	})
-	if _, err := Push(ctx, []store.ExportRow{row}, "v1:test", "remote-test-machine", false, nil); err != nil {
+	if _, err := Push(ctx, []store.ExportRow{row}, Options{Fingerprint: "v1:test", Machine: "remote-test-machine", AllowDelete: false, Owner: "user_remote_test"}); err != nil {
 		t.Fatal(err)
 	}
 	hits, err := Search(ctx, "quartz-remote-marker", "claude", "", "", 5)
@@ -87,7 +87,7 @@ func TestRemoteConcurrentOwnership(t *testing.T) {
 		wg.Add(1)
 		go func(machine string) {
 			defer wg.Done()
-			_, err := Push(ctx, []store.ExportRow{row}, "test-policy", machine, true, nil)
+			_, err := Push(ctx, []store.ExportRow{row}, Options{Fingerprint: "test-policy", Machine: machine, AllowDelete: true, Owner: "user_remote_test"})
 			errs <- err
 		}(machine)
 	}
@@ -110,7 +110,7 @@ func TestRemoteConcurrentOwnership(t *testing.T) {
 	if _, err = db.Exec(ctx, `DELETE FROM sessions WHERE source=$1 AND id=$2`, row.Source, row.ID); err == nil {
 		t.Fatal("legacy delete bypassed restrictive ownership")
 	}
-	stats, err := Push(ctx, nil, "test-policy", machines[0], true, nil)
+	stats, err := Push(ctx, nil, Options{Fingerprint: "test-policy", Machine: machines[0], AllowDelete: true, Owner: "user_remote_test"})
 	if err != nil || stats.Deleted != 0 {
 		t.Fatalf("first removal=%+v err=%v", stats, err)
 	}
@@ -118,7 +118,7 @@ func TestRemoteConcurrentOwnership(t *testing.T) {
 	if err = db.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE source=$1 AND id=$2`, row.Source, row.ID).Scan(&sessions); err != nil || sessions != 1 {
 		t.Fatalf("shared sessions=%d err=%v", sessions, err)
 	}
-	stats, err = Push(ctx, nil, "test-policy", machines[1], true, nil)
+	stats, err = Push(ctx, nil, Options{Fingerprint: "test-policy", Machine: machines[1], AllowDelete: true, Owner: "user_remote_test"})
 	if err != nil || stats.Deleted != 1 {
 		t.Fatalf("last removal=%+v err=%v", stats, err)
 	}

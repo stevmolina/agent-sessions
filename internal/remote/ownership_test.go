@@ -56,13 +56,26 @@ func ownershipDB(t *testing.T) sqliteConn {
 	t.Cleanup(func() { db.Close() })
 	db.SetMaxOpenConns(1)
 	_, err = db.Exec(`PRAGMA foreign_keys=ON;
- CREATE TABLE sessions(source text,id text,machine text,provider text,provider_session_id text,cwd text,title text,path text,origin_path text,revision text,clean_fingerprint text,started_at text,updated_at text,body text,turns text,pushed_at text DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(source,id));
+ CREATE TABLE sessions(source text,id text,machine text,provider text,provider_session_id text,cwd text,title text,path text,origin_path text,revision text,clean_fingerprint text,started_at text,updated_at text,body text,turns text,pushed_at text DEFAULT CURRENT_TIMESTAMP,owner text,brain text,PRIMARY KEY(source,id));
  CREATE TABLE session_machines(source text,id text,machine text,PRIMARY KEY(source,id,machine),FOREIGN KEY(source,id) REFERENCES sessions(source,id) ON DELETE RESTRICT);`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return sqliteConn{db}
 }
+
+const testOwner = "user_test_owner"
+
+func testOpts(machine string, allowDelete bool) Options {
+	return Options{Fingerprint: "policy", Machine: machine, AllowDelete: allowDelete, Owner: testOwner}
+}
+
+func verifiedOpts(machine string, allowDelete bool, verify Verifier) Options {
+	opts := testOpts(machine, allowDelete)
+	opts.Verify = verify
+	return opts
+}
+
 func pushFixture() store.ExportRow {
 	return store.ExportRow{Source: "claude", ID: "shared", Provider: "claude", Revision: "1", Body: "cleaned text", Turns: []model.Turn{{Role: "user", Text: "cleaned text"}}}
 }
@@ -78,11 +91,11 @@ func TestSharedOwnershipAndEmptySuccessfulSnapshots(t *testing.T) {
 	db := ownershipDB(t)
 	ctx := context.Background()
 	row := pushFixture()
-	first, err := syncRows(ctx, db, []store.ExportRow{row}, "policy", "machine-a", true)
+	first, err := syncRows(ctx, db, []store.ExportRow{row}, testOpts("machine-a", true))
 	if err != nil || first.Uploaded != 1 {
 		t.Fatalf("first=%+v err=%v", first, err)
 	}
-	second, err := syncRows(ctx, db, []store.ExportRow{row}, "policy", "machine-b", true)
+	second, err := syncRows(ctx, db, []store.ExportRow{row}, testOpts("machine-b", true))
 	if err != nil || second.Uploaded != 0 || second.Unchanged != 1 {
 		t.Fatalf("second=%+v err=%v", second, err)
 	}
@@ -93,18 +106,18 @@ func TestSharedOwnershipAndEmptySuccessfulSnapshots(t *testing.T) {
 	if _, err := db.Exec(ctx, `DELETE FROM sessions WHERE source=$1 AND id=$2`, row.Source, row.ID); err == nil {
 		t.Fatal("legacy deletion bypassed ownership")
 	}
-	removed, err := syncRows(ctx, db, nil, "policy", "machine-a", true)
+	removed, err := syncRows(ctx, db, nil, testOpts("machine-a", true))
 	if err != nil || removed.Deleted != 0 {
 		t.Fatalf("remove a=%+v err=%v", removed, err)
 	}
 	if sqlCount(t, db.db, "sessions") != 1 || sqlCount(t, db.db, "session_machines") != 1 {
 		t.Fatal("removing one owner deleted shared content")
 	}
-	kept, err := syncRows(ctx, db, nil, "policy", "machine-b", false)
+	kept, err := syncRows(ctx, db, nil, testOpts("machine-b", false))
 	if err != nil || kept.Deleted != 0 || sqlCount(t, db.db, "session_machines") != 1 {
 		t.Fatalf("incomplete scan=%+v err=%v", kept, err)
 	}
-	removed, err = syncRows(ctx, db, nil, "policy", "machine-b", true)
+	removed, err = syncRows(ctx, db, nil, testOpts("machine-b", true))
 	if err != nil || removed.Deleted != 1 || sqlCount(t, db.db, "sessions") != 0 {
 		t.Fatalf("last owner=%+v err=%v", removed, err)
 	}
@@ -113,13 +126,13 @@ func TestPreviouslyEmptyRemoteTurnsAreUploadedAgain(t *testing.T) {
 	db := ownershipDB(t)
 	ctx := context.Background()
 	row := pushFixture()
-	if _, err := syncRows(ctx, db, []store.ExportRow{row}, "policy", "machine-a", true); err != nil {
+	if _, err := syncRows(ctx, db, []store.ExportRow{row}, testOpts("machine-a", true)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(ctx, `UPDATE sessions SET turns='[]'`); err != nil {
 		t.Fatal(err)
 	}
-	stats, err := syncRows(ctx, db, []store.ExportRow{row}, "policy", "machine-a", true)
+	stats, err := syncRows(ctx, db, []store.ExportRow{row}, testOpts("machine-a", true))
 	if err != nil || stats.Uploaded != 1 {
 		t.Fatalf("stats=%+v err=%v", stats, err)
 	}
@@ -135,7 +148,7 @@ func TestOwnershipBackfillRunsOnlyOnce(t *testing.T) {
 	db := ownershipDB(t)
 	ctx := context.Background()
 	row := pushFixture()
-	if err := upsert(ctx, db, row, "legacy-machine", "policy"); err != nil {
+	if err := upsert(ctx, db, row, "legacy-machine", "policy", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := schemaFS.ReadFile("schema.sql")
