@@ -30,7 +30,7 @@ const upsertSQL = `INSERT INTO sessions (
   body = EXCLUDED.body,
   turns = EXCLUDED.turns,
   owner = EXCLUDED.owner,
-  brain = EXCLUDED.brain,
+  brain = COALESCE(EXCLUDED.brain, sessions.brain),
   pushed_at = now()`
 
 const remoteStateSQL = `SELECT s.source, s.id,
@@ -40,7 +40,10 @@ const remoteStateSQL = `SELECT s.source, s.id,
  FROM sessions s`
 const addOwnershipSQL = `INSERT INTO session_machines(source,id,machine) VALUES($1,$2,$3) ON CONFLICT DO NOTHING`
 const removeOwnershipSQL = `DELETE FROM session_machines WHERE machine=$1 AND source=$2 AND id=$3`
-const retagSQL = `UPDATE sessions SET owner=$1, brain=$2 WHERE source=$3 AND id=$4`
+
+// An empty brain ($2 NULL) never clears a brain another machine's map set, so
+// two machines with different maps cannot undo each other on every push.
+const retagSQL = `UPDATE sessions SET owner=$1, brain=COALESCE($2, brain) WHERE source=$3 AND id=$4`
 const deleteOrphanSQL = `DELETE FROM sessions AS s WHERE s.source=$1 AND s.id=$2 AND NOT EXISTS (SELECT 1 FROM session_machines m WHERE m.source=s.source AND m.id=s.id)`
 
 // Verifier re-checks a row right before it is uploaded. A false result skips the
@@ -181,6 +184,7 @@ func syncRows(ctx context.Context, db conn, rows []store.ExportRow, opts Options
 	// An unchanged row keeps its content but may carry stale tags: the map
 	// changed, or an older client wrote it before owner and brain existed. Only
 	// rows whose tags differ are written, so a push with no changes writes nothing.
+	// A row this machine cannot file keeps the brain another machine gave it.
 	remoteByKey := make(map[string]Row, len(remoteRows))
 	for _, row := range remoteRows {
 		remoteByKey[key(row)] = row
@@ -195,7 +199,8 @@ func syncRows(ctx context.Context, db conn, rows []store.ExportRow, opts Options
 			continue
 		}
 		brain := brainOf(opts.Brains, byKey[key(item)])
-		if prev.Owner != opts.Owner || prev.Brain != brain {
+		brainStale := brain != "" && prev.Brain != brain
+		if prev.Owner != opts.Owner || brainStale {
 			retags = append(retags, []any{opts.Owner, nullable(brain), item.Source, item.ID})
 		}
 	}

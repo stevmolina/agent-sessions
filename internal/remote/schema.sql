@@ -24,16 +24,30 @@ CREATE TABLE IF NOT EXISTS sessions (
 -- owner is the WorkOS user id of the person whose push wrote the row. brain is
 -- the knowledge repo (owner/repo) the session is filed under, from that person's
 -- brains.json; NULL when nothing matches. Readers show each person only their
--- own rows. Added after the table first shipped, hence the ALTERs.
-ALTER TABLE sessions ADD COLUMN IF NOT EXISTS owner text;
-
-ALTER TABLE sessions ADD COLUMN IF NOT EXISTS brain text;
+-- own rows. Added after the table first shipped. ALTER TABLE ... IF NOT EXISTS
+-- still takes an ACCESS EXCLUSIVE lock, which would block every reader for the
+-- whole push, so the catalog is checked first and the ALTER runs only once.
+DO $$ BEGIN
+ IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'sessions' AND column_name = 'owner') THEN
+  ALTER TABLE sessions ADD COLUMN owner text;
+ END IF;
+ IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'sessions' AND column_name = 'brain') THEN
+  ALTER TABLE sessions ADD COLUMN brain text;
+ END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS sessions_machine_idx ON sessions (machine);
 
-CREATE INDEX IF NOT EXISTS sessions_owner_updated_idx ON sessions (owner, updated_at DESC);
-
-CREATE INDEX IF NOT EXISTS sessions_owner_brain_idx ON sessions (owner, brain);
+-- CREATE INDEX locks the table against writes before it checks IF NOT EXISTS,
+-- so these two are also created only when missing.
+DO $$ BEGIN
+ IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'sessions_owner_updated_idx') THEN
+  CREATE INDEX sessions_owner_updated_idx ON sessions (owner, updated_at DESC);
+ END IF;
+ IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'sessions_owner_brain_idx') THEN
+  CREATE INDEX sessions_owner_brain_idx ON sessions (owner, brain);
+ END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS sessions_search_idx ON sessions USING GIN (search);
 
@@ -65,7 +79,12 @@ CREATE TABLE IF NOT EXISTS sessions_push_heartbeats (
 
 -- Failed attempts since the last success. One blip does not page; two in a row do.
 -- Added after the table first shipped, hence the ALTER for existing databases.
-ALTER TABLE sessions_push_heartbeats ADD COLUMN IF NOT EXISTS consecutive_failures integer NOT NULL DEFAULT 0;
+-- Guarded like the sessions columns, so the lock is taken only once.
+DO $$ BEGIN
+ IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'sessions_push_heartbeats' AND column_name = 'consecutive_failures') THEN
+  ALTER TABLE sessions_push_heartbeats ADD COLUMN consecutive_failures integer NOT NULL DEFAULT 0;
+ END IF;
+END $$;
 
 GRANT SELECT ON TABLE sessions_push_heartbeats TO sessions_reader;
 
@@ -73,8 +92,15 @@ GRANT SELECT ON TABLE sessions_push_heartbeats TO sessions_reader;
 -- not exist would fail every push in a database without it, so check first.
 DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'sessions_mcp_reader') THEN GRANT SELECT ON TABLE sessions, sessions_push_heartbeats TO sessions_mcp_reader; END IF; END $$;
 
--- brain-mcp reads sessions as brain_mcp and filters by owner itself. Same check.
-DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'brain_mcp') THEN GRANT USAGE ON SCHEMA public TO brain_mcp; GRANT SELECT ON TABLE sessions TO brain_mcp; END IF; END $$;
+-- brain-mcp reads sessions as brain_mcp and filters by owner itself. Same check,
+-- and a grant this role may not make never fails the push.
+DO $$ BEGIN
+ IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'brain_mcp') THEN
+  GRANT USAGE ON SCHEMA public TO brain_mcp;
+  GRANT SELECT ON TABLE sessions TO brain_mcp;
+ END IF;
+EXCEPTION WHEN insufficient_privilege THEN NULL;
+END $$;
 
 -- Separate machine ownership preserves shared chats until their last owner removes them.
 -- RESTRICT prevents old clients from deleting rows with active owners.

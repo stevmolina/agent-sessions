@@ -141,3 +141,49 @@ func TestPushRefusesWithoutOwner(t *testing.T) {
 		t.Fatal("nothing should be written")
 	}
 }
+
+// Two machines, one with a map and one without, must not undo each other.
+func TestEmptyBrainNeverClearsAnotherMachinesBrain(t *testing.T) {
+	db := &countingConn{sqliteConn: ownershipDB(t)}
+	ctx := context.Background()
+	row := withCWD(pushFixture(), "client", "/home/u/engagements/acme")
+	mapped := testOpts("machine-a", true)
+	mapped.Brains = testBrains(t, acmeMap)
+	if _, err := syncRows(ctx, db, []store.ExportRow{row}, mapped); err != nil {
+		t.Fatal(err)
+	}
+	// Machine b has no map: unchanged row, nothing to write.
+	db.execs = 0
+	stats, err := syncRows(ctx, db, []store.ExportRow{row}, testOpts("machine-b", true))
+	if err != nil || stats.Retagged != 0 {
+		t.Fatalf("stats=%+v err=%v", stats, err)
+	}
+	if _, brain := readTags(t, db.db, "client"); brain.String != "someone/acme-knowledge" {
+		t.Fatalf("brain cleared: %v", brain)
+	}
+	// Machine b uploads new content: the upsert keeps the brain too.
+	changed := row
+	changed.Revision = "2"
+	if stats, err = syncRows(ctx, db, []store.ExportRow{changed}, testOpts("machine-b", true)); err != nil || stats.Uploaded != 1 {
+		t.Fatalf("stats=%+v err=%v", stats, err)
+	}
+	if _, brain := readTags(t, db.db, "client"); brain.String != "someone/acme-knowledge" {
+		t.Fatalf("upsert cleared brain: %v", brain)
+	}
+	// A wrong owner is still fixed, and the brain survives that too.
+	if _, err := db.Exec(ctx, `UPDATE sessions SET owner = 'someone-else'`); err != nil {
+		t.Fatal(err)
+	}
+	if stats, err = syncRows(ctx, db, []store.ExportRow{changed}, testOpts("machine-b", true)); err != nil || stats.Retagged != 1 {
+		t.Fatalf("stats=%+v err=%v", stats, err)
+	}
+	owner, brain := readTags(t, db.db, "client")
+	if owner.String != testOwner || brain.String != "someone/acme-knowledge" {
+		t.Fatalf("owner=%v brain=%v", owner, brain)
+	}
+	// Machine a pushes again: everything already matches.
+	db.execs = 0
+	if stats, err = syncRows(ctx, db, []store.ExportRow{changed}, mapped); err != nil || stats.Retagged != 0 || db.execs != 0 {
+		t.Fatalf("stats=%+v execs=%d err=%v", stats, db.execs, err)
+	}
+}
