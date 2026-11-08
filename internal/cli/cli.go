@@ -18,6 +18,7 @@ import (
 	"github.com/usuario/sessions/internal/clean"
 	"github.com/usuario/sessions/internal/config"
 	"github.com/usuario/sessions/internal/health"
+	"github.com/usuario/sessions/internal/importer"
 	"github.com/usuario/sessions/internal/indexer"
 	"github.com/usuario/sessions/internal/mcpserver"
 	"github.com/usuario/sessions/internal/model"
@@ -29,11 +30,12 @@ import (
 	"github.com/usuario/sessions/internal/version"
 )
 
-const commands = "{index,search,show,push,health,version,mcp}"
+const commands = "{index,search,show,push,import,health,version,mcp}"
 
 const help = `usage: sessions [-h] ` + commands + ` ...
 
-Search Cursor, Claude Code, Codex, and T3 Code transcripts in place.
+Search Cursor, Claude Code, Codex, and T3 Code transcripts in place, plus
+conversations imported from ChatGPT, Claude.ai and Grok exports.
 
 index and search redact secrets before writing the local index. Transcript
 files on disk are not modified. show prints the raw file. push uploads the
@@ -45,6 +47,8 @@ positional arguments:
     search             Reindex stale sources, then FTS search.
     show               Print human turns for a session id or locator.
     push               Refresh, then upsert cleaned sessions to Postgres.
+    import             Add conversations from ChatGPT, Claude.ai or Grok
+                       export zips.
     health             Show each machine's last push and flag problems.
     version            Print the build version.
     mcp                Serve authenticated remote search over HTTP.
@@ -57,6 +61,19 @@ push options:
                        Agent hooks call this when a turn ends. Only one push
                        runs per machine; a request made during a push makes
                        that push run once more when it finishes.
+
+push needs SESSIONS_OWNER (your WorkOS user id; env, else Doppler project
+sessions). Each session is filed under a brain by its folder, using
+$SESSIONS_BRAINS_FILE or ~/.config/sessions/brains.json when present.
+
+import options:
+  sessions import FILE.zip... [--push]
+                       The format is detected from the zip. Conversations are
+                       stored under $SESSIONS_IMPORTS_ROOT (default
+                       ~/.local/share/sessions/imports) and indexed, redacted
+                       and uploaded like any other session. Importing the same
+                       export again updates in place.
+  --push               Push right after importing.
 
 health options:
   --expect A,B         Machines that should be pushing, even if none of their
@@ -71,7 +88,7 @@ health options:
                        (default ~/.cache/sessions/health-alert.json).
 
 search options:
-  --source cursor|claude|codex|t3code
+  --source cursor|claude|codex|t3code|chatgpt|claude-ai|grok
                        Where the conversation was opened. Literal; does not
                        rewrite a native hit to its T3 twin.
   --provider cursor|claude|codex|grok|opencode
@@ -126,6 +143,8 @@ func Main(args []string, out, errOut io.Writer) int {
 		default:
 			return usage(errOut, "unrecognized arguments: "+strings.Join(args[1:], " "))
 		}
+	case "import":
+		return importCmd(args[1:], out, errOut)
 	case "health":
 		return healthCmd(args[1:], out, errOut)
 	case "version":
@@ -135,7 +154,7 @@ func Main(args []string, out, errOut io.Writer) int {
 		fmt.Fprintln(out, version.String())
 		return 0
 	default:
-		return usage(errOut, "argument command: invalid choice: '"+args[0]+"' (choose from 'index', 'search', 'show', 'push', 'health', 'version', 'mcp')")
+		return usage(errOut, "argument command: invalid choice: '"+args[0]+"' (choose from 'index', 'search', 'show', 'push', 'import', 'health', 'version', 'mcp')")
 	}
 }
 func usage(w io.Writer, msg string) int {
@@ -184,7 +203,7 @@ func search(args []string, out, errOut io.Writer) int {
 			}
 			sourceFilter = args[i]
 			if !source.ValidSource(sourceFilter) {
-				return usage(errOut, "argument --source: invalid choice: '"+sourceFilter+"' (choose from 'cursor', 'claude', 'codex', 't3code')")
+				return usage(errOut, "argument --source: invalid choice: '"+sourceFilter+"' (choose from '"+strings.Join(source.KnownSources(), "', '")+"')")
 			}
 		case "--provider":
 			i++
@@ -598,6 +617,55 @@ func openPushLog(dir string) (*os.File, error) {
 		_ = os.Rename(path, path+".1")
 	}
 	return os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+}
+
+// importCmd stores each conversation of the given export zips as a file under
+// the imports root. The next index or push reads them like any other source,
+// so redaction still happens in one place.
+func importCmd(args []string, out, errOut io.Writer) int {
+	push := false
+	var files []string
+	for _, arg := range args {
+		switch {
+		case arg == "--push":
+			push = true
+		case strings.HasPrefix(arg, "--"):
+			return usage(errOut, "unrecognized arguments: "+arg)
+		default:
+			files = append(files, arg)
+		}
+	}
+	if len(files) == 0 {
+		return usage(errOut, "the following arguments are required: file")
+	}
+	root := config.ImportsRoot()
+	var total []importer.Summary
+	failed := false
+	for _, file := range files {
+		res, err := importer.ReadZip(file, importer.DefaultLimits)
+		if err != nil {
+			fmt.Fprintf(errOut, "%s: %v\n", file, err)
+			failed = true
+			continue
+		}
+		summary, err := importer.Store(root, res)
+		total = importer.Merge(total, summary)
+		if err != nil {
+			fmt.Fprintf(errOut, "%s: %v\n", file, err)
+			failed = true
+		}
+	}
+	for _, s := range total {
+		fmt.Fprintf(out, "%s: %d imported, %d unchanged, %d skipped\n", s.Source, s.Imported, s.Unchanged, s.Skipped)
+	}
+	if failed {
+		return 1
+	}
+	if push {
+		return pushLocked(out, errOut)
+	}
+	fmt.Fprintln(out, "stored in "+root+"; the next push uploads them")
+	return 0
 }
 
 func healthCmd(args []string, out, errOut io.Writer) int {
