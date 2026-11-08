@@ -128,7 +128,7 @@ func openFixture(t *testing.T, text string) (*sql.DB, string) {
 	t.Helper()
 	root := t.TempDir()
 	claude := filepath.Join(root, "claude")
-	for _, key := range []string{"SESSIONS_CURSOR_ROOT", "SESSIONS_CODEX_ROOT", "SESSIONS_CODEX_ARCHIVE_ROOT"} {
+	for _, key := range []string{"SESSIONS_CURSOR_ROOT", "SESSIONS_CODEX_ROOT", "SESSIONS_CODEX_ARCHIVE_ROOT", "SESSIONS_IMPORTS_ROOT"} {
 		dir := filepath.Join(root, key)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)

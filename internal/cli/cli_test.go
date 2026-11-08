@@ -120,6 +120,7 @@ func installFixtures(t *testing.T) fixtureRoots {
 	t.Setenv("SESSIONS_CODEX_ARCHIVE_ROOT", archive)
 	t.Setenv("SESSIONS_T3_ROOT", t3root)
 	t.Setenv("SESSIONS_T3_INDEXEDDB", filepath.Join(root, "missing-indexeddb"))
+	t.Setenv("SESSIONS_IMPORTS_ROOT", filepath.Join(root, "imports"))
 	return fixtureRoots{cursor: cursor, claude: claude, codex: codex, t3: t3root}
 }
 

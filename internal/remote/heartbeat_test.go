@@ -144,7 +144,7 @@ func TestVerifyRunsOnUploadsOnlyAndFailureBlocksDeletes(t *testing.T) {
 	kept := pushFixture()
 	gone := pushFixture()
 	gone.ID = "gone"
-	if _, err := syncRows(ctx, db, []store.ExportRow{kept, gone}, "policy", "machine-a", true); err != nil {
+	if _, err := syncRows(ctx, db, []store.ExportRow{kept, gone}, testOpts("machine-a", true)); err != nil {
 		t.Fatal(err)
 	}
 	changed := kept
@@ -158,7 +158,7 @@ func TestVerifyRunsOnUploadsOnlyAndFailureBlocksDeletes(t *testing.T) {
 		return r.ID != "fresh"
 	}
 	// "gone" disappeared locally; "fresh" fails verification.
-	stats, err := syncRowsVerified(ctx, db, []store.ExportRow{changed, fresh}, "policy", "machine-a", true, verify)
+	stats, err := syncRows(ctx, db, []store.ExportRow{changed, fresh}, verifiedOpts("machine-a", true, verify))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestVerifyRunsOnUploadsOnlyAndFailureBlocksDeletes(t *testing.T) {
 	}
 
 	checked = nil
-	if _, err := syncRowsVerified(ctx, db, []store.ExportRow{changed}, "policy", "machine-a", true, verify); err != nil {
+	if _, err := syncRows(ctx, db, []store.ExportRow{changed}, verifiedOpts("machine-a", true, verify)); err != nil {
 		t.Fatal(err)
 	}
 	if len(checked) != 0 {
@@ -193,11 +193,11 @@ func TestUnchangedPushWritesNothing(t *testing.T) {
 	second := pushFixture()
 	second.ID = "other"
 	rows = append(rows, second)
-	if _, err := syncRows(ctx, db, rows, "policy", "machine-a", true); err != nil {
+	if _, err := syncRows(ctx, db, rows, testOpts("machine-a", true)); err != nil {
 		t.Fatal(err)
 	}
 	db.execs = 0
-	stats, err := syncRows(ctx, db, rows, "policy", "machine-a", true)
+	stats, err := syncRows(ctx, db, rows, testOpts("machine-a", true))
 	if err != nil {
 		t.Fatal(err)
 	}

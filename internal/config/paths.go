@@ -32,6 +32,11 @@ func CodexArchiveRoot() string {
 }
 func T3Root() string { return envPath("SESSIONS_T3_ROOT", ".t3/userdata") }
 
+// ImportsRoot holds conversations imported from chat app exports, one JSON file
+// each under <source>/. It is data, not cache: the next push uploads what is
+// here, and deleting it removes those sessions from the shared copy.
+func ImportsRoot() string { return envPath("SESSIONS_IMPORTS_ROOT", ".local/share/sessions/imports") }
+
 func T3RootExplicit() bool { return os.Getenv("SESSIONS_T3_ROOT") != "" }
 
 func IndexedDBPath() string {

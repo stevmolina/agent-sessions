@@ -29,7 +29,7 @@ func NormalizeProvider(name string) string {
 }
 
 func KnownSources() []string {
-	return []string{"cursor", "claude", "codex", "t3code"}
+	return []string{"cursor", "claude", "codex", "t3code", SourceChatGPT, SourceClaudeAI, SourceGrok}
 }
 
 func ValidSource(value string) bool {

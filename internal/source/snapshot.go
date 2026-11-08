@@ -12,7 +12,7 @@ import (
 // CheckSnapshot refuses deletion when a previously indexed source disappears.
 // Missing roots that have never contributed rows remain optional.
 func CheckSnapshot(locators []string) error {
-	roots := []string{config.CursorRoot(), config.ClaudeRoot(), config.CodexRoot(), config.CodexArchiveRoot()}
+	roots := []string{config.CursorRoot(), config.ClaudeRoot(), config.CodexRoot(), config.CodexArchiveRoot(), config.ImportsRoot()}
 	for _, locator := range locators {
 		if strings.HasPrefix(locator, "t3code://") {
 			db, envID, err := t3DB()
