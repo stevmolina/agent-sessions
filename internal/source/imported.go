@@ -170,10 +170,13 @@ func (Imports) Load(c Candidate) (*model.Session, error) {
 	return s, nil
 }
 
-var safeFileName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
+// Lowercase only: on a case-insensitive disk (macOS by default) ids that
+// differ only in case would share one file and overwrite each other.
+var safeFileName = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,127}$`)
 
 // ImportedPath is where a conversation is stored. Ids come from an untrusted
-// export, so one that is not a plain file name is stored under its hash.
+// export, so one that is not a plain lowercase file name is stored under its
+// hash. The real id is always the one inside the file.
 func ImportedPath(root string, conv Imported) string {
 	name := conv.ID
 	if !safeFileName.MatchString(name) || strings.Contains(name, "..") {

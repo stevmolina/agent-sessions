@@ -46,7 +46,7 @@ func TestImportsDiscoverAndLoad(t *testing.T) {
 
 func TestImportedPathNeverEscapes(t *testing.T) {
 	root := t.TempDir()
-	for _, id := range []string{"../../evil", "a/b", ".hidden", "x..y", strings.Repeat("a", 200), `c:\x`} {
+	for _, id := range []string{"../../evil", "a/b", ".hidden", "x..y", strings.Repeat("a", 200), `c:\x`, "Conv-1"} {
 		path := ImportedPath(root, Imported{Source: SourceChatGPT, ID: id})
 		if filepath.Dir(path) != filepath.Join(root, SourceChatGPT) || !strings.HasPrefix(filepath.Base(path), "sha256-") {
 			t.Errorf("%q stored at %s", id, path)
@@ -68,5 +68,40 @@ func TestLoadRefusesMismatchedSource(t *testing.T) {
 	}
 	if _, err := WriteImported(root, Imported{Source: "cursor", ID: "c1"}); err == nil {
 		t.Fatal("only import sources may be written")
+	}
+}
+
+// Ids that differ only in case get different files, even on a disk that
+// ignores case, and each loads back with its real id.
+func TestImportedPathIsCaseSafe(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("SESSIONS_IMPORTS_ROOT", root)
+	lower := Imported{Source: SourceGrok, ID: "abc-1", Turns: []model.Turn{{Role: "user", Text: "lower"}}}
+	upper := Imported{Source: SourceGrok, ID: "ABC-1", Turns: []model.Turn{{Role: "user", Text: "upper"}}}
+	if strings.EqualFold(filepath.Base(ImportedPath(root, lower)), filepath.Base(ImportedPath(root, upper))) {
+		t.Fatal("ids differing only in case share a file name")
+	}
+	if !strings.HasPrefix(filepath.Base(ImportedPath(root, upper)), "sha256-") {
+		t.Fatal("a mixed-case id should be stored under its hash")
+	}
+	for _, conv := range []Imported{lower, upper} {
+		if _, err := WriteImported(root, conv); err != nil {
+			t.Fatal(err)
+		}
+	}
+	found, err := Imports{}.Discover()
+	if err != nil || len(found) != 2 {
+		t.Fatalf("found=%d err=%v", len(found), err)
+	}
+	ids := map[string]string{}
+	for _, c := range found {
+		s, err := Imports{}.Load(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids[s.ID] = s.Body
+	}
+	if ids["abc-1"] != "user: lower" || ids["ABC-1"] != "user: upper" {
+		t.Fatalf("ids=%v", ids)
 	}
 }
