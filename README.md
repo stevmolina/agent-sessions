@@ -64,7 +64,7 @@ Every row `push` writes carries two tags, so a reader such as brain-mcp can show
 
 The first rule with a matching pattern wins. A pattern matches whole folder names anywhere in the path: `engagements/client` matches `/home/me/dev/engagements/client/app` but not `.../engagements/client2`. A pattern ending in `*` matches any folder name that starts with it: `worktrees/client-*` matches `.../worktrees/client-fix-login`. Patterns are relative (no leading `/`), and `\` counts as `/`. A session with no folder (imports) or no match gets `default`; with no default, or no file at all, the brain is empty. A malformed file stops `push`.
 
-Change the map and the next push retags the affected rows in place without uploading them again. The push summary counts them: `0 uploaded, 812 unchanged (40 retagged), ...`.
+Change the map and the next push retags the affected rows in place without uploading them again. The push summary counts them: `0 uploaded, 812 unchanged (40 retagged), ...`. A row's owner never changes once set, so another person pushing the same chat does not take it over or refile it. An empty brain never clears one: a machine with no map, or no matching rule, leaves the brain another machine set.
 
 ## Import chat exports
 

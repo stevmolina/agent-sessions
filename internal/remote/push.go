@@ -29,8 +29,9 @@ const upsertSQL = `INSERT INTO sessions (
   updated_at = EXCLUDED.updated_at,
   body = EXCLUDED.body,
   turns = EXCLUDED.turns,
-  owner = EXCLUDED.owner,
-  brain = COALESCE(EXCLUDED.brain, sessions.brain),
+  owner = COALESCE(sessions.owner, EXCLUDED.owner),
+  brain = CASE WHEN sessions.owner IS NULL OR sessions.owner = EXCLUDED.owner
+    THEN COALESCE(EXCLUDED.brain, sessions.brain) ELSE sessions.brain END,
   pushed_at = now()`
 
 const remoteStateSQL = `SELECT s.source, s.id,
@@ -41,9 +42,12 @@ const remoteStateSQL = `SELECT s.source, s.id,
 const addOwnershipSQL = `INSERT INTO session_machines(source,id,machine) VALUES($1,$2,$3) ON CONFLICT DO NOTHING`
 const removeOwnershipSQL = `DELETE FROM session_machines WHERE machine=$1 AND source=$2 AND id=$3`
 
-// An empty brain ($2 NULL) never clears a brain another machine's map set, so
-// two machines with different maps cannot undo each other on every push.
-const retagSQL = `UPDATE sessions SET owner=$1, brain=COALESCE($2, brain) WHERE source=$3 AND id=$4`
+// An owner, once set, never changes: a second person pushing the same chat
+// does not take it over. An empty brain ($2 NULL) never clears a brain another
+// machine's map set, so two machines with different maps cannot undo each
+// other on every push. The WHERE repeats the owner check the caller made.
+const retagSQL = `UPDATE sessions SET owner=COALESCE(owner, $1), brain=COALESCE($2, brain)
+ WHERE source=$3 AND id=$4 AND (owner IS NULL OR owner=$1)`
 const deleteOrphanSQL = `DELETE FROM sessions AS s WHERE s.source=$1 AND s.id=$2 AND NOT EXISTS (SELECT 1 FROM session_machines m WHERE m.source=s.source AND m.id=s.id)`
 
 // Verifier re-checks a row right before it is uploaded. A false result skips the
@@ -72,8 +76,9 @@ type Options struct {
 var errNoOwner = errors.New("refusing to push: no owner (set SESSIONS_OWNER)")
 
 // Push upserts cleaned rows for this machine and deletes rows this machine no
-// longer has. Every row it writes carries the owner and brain from opts, and an
-// unchanged row whose tags differ is retagged in place.
+// longer has. A row it writes gets the owner from opts unless it already has
+// one, and the brain from opts unless that is empty or the row is someone
+// else's. An unchanged row whose tags are missing or stale is retagged in place.
 func Push(ctx context.Context, rows []store.ExportRow, opts Options) (Stats, error) {
 	if err := CheckFingerprint(opts.Fingerprint); err != nil {
 		return Stats{}, err
@@ -184,7 +189,8 @@ func syncRows(ctx context.Context, db conn, rows []store.ExportRow, opts Options
 	// An unchanged row keeps its content but may carry stale tags: the map
 	// changed, or an older client wrote it before owner and brain existed. Only
 	// rows whose tags differ are written, so a push with no changes writes nothing.
-	// A row this machine cannot file keeps the brain another machine gave it.
+	// A row this machine cannot file keeps the brain another machine gave it,
+	// and a row someone else owns is left alone.
 	remoteByKey := make(map[string]Row, len(remoteRows))
 	for _, row := range remoteRows {
 		remoteByKey[key(row)] = row
@@ -198,9 +204,12 @@ func syncRows(ctx context.Context, db conn, rows []store.ExportRow, opts Options
 		if !ok {
 			continue
 		}
+		if prev.Owner != "" && prev.Owner != opts.Owner {
+			continue // another person's row: neither its owner nor its brain is ours to set
+		}
 		brain := brainOf(opts.Brains, byKey[key(item)])
 		brainStale := brain != "" && prev.Brain != brain
-		if prev.Owner != opts.Owner || brainStale {
+		if prev.Owner == "" || brainStale {
 			retags = append(retags, []any{opts.Owner, nullable(brain), item.Source, item.ID})
 		}
 	}
