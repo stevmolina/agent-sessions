@@ -86,7 +86,8 @@ func Search(ctx context.Context, query string, f Filter, limit int) ([]Hit, erro
 		}
 	}
 	if f.Machine != "" {
-		sql += " AND (machine = $" + itoa(len(args)+1) + " OR EXISTS (SELECT 1 FROM session_machines m WHERE m.source = sessions.source AND m.id = sessions.id AND m.machine = $" + itoa(len(args)+1) + "))"
+		// The read-only role cannot see session_machines, so this is the machine that pushed the row last.
+		sql += " AND machine = $" + itoa(len(args)+1)
 		args = append(args, f.Machine)
 	}
 	sql += " ORDER BY ts_rank(search, plainto_tsquery('english', $1)) DESC, updated_at DESC NULLS LAST LIMIT $" + itoa(len(args)+1)

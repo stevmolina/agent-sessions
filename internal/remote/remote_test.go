@@ -44,6 +44,20 @@ func TestRemoteRoundTrip(t *testing.T) {
 	if len(hits) != 1 || hits[0].ID != row.ID || strings.Contains(hits[0].Snippet, "DATABASE_URL") || hits[0].Machine != "remote-test-machine" || len(hits[0].Repos) != 1 {
 		t.Fatalf("hits=%d", len(hits))
 	}
+	for _, f := range []Filter{{Repo: "remote-fixture"}, {Repo: "ACME/Remote-Fixture"}, {CWD: "no-such-folder"}, {Repo: "other-repo"}, {Machine: "elsewhere"}} {
+		f.Source = "claude"
+		hits, err := Search(ctx, "quartz-remote-marker", f, 5)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := 1
+		if f.CWD != "" || f.Repo == "other-repo" || f.Machine != "" {
+			want = 0
+		}
+		if len(hits) != want {
+			t.Fatalf("filter %+v: %d hits, want %d", f, len(hits), want)
+		}
+	}
 	shown, err := Show(ctx, "claude", row.ID)
 	if err != nil || len(shown) != 1 || shown[0].Turns[0].Text != "quartz-remote-marker" {
 		t.Fatal("show failed")
