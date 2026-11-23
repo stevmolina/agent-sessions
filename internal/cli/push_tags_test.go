@@ -18,6 +18,7 @@ func TestPushTagsNeedsOwner(t *testing.T) {
 }
 
 func TestPushTagsReadsOwnerAndMap(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // no shared brains.json from the real home
 	dir := t.TempDir()
 	path := filepath.Join(dir, "brains.json")
 	t.Setenv("SESSIONS_OWNER", "user_invented")

@@ -19,7 +19,7 @@ var schemaFS embed.FS
 var requiredColumns = []string{
 	"source", "id", "machine", "provider", "provider_session_id", "cwd", "title",
 	"path", "origin_path", "revision", "clean_fingerprint", "started_at", "updated_at",
-	"body", "turns", "pushed_at", "search", "owner", "brain",
+	"body", "turns", "pushed_at", "search", "owner", "brain", "repos",
 }
 
 type Stats struct {

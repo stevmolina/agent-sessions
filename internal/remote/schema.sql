@@ -34,6 +34,13 @@ DO $$ BEGIN
  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'sessions' AND column_name = 'brain') THEN
   ALTER TABLE sessions ADD COLUMN brain text;
  END IF;
+ -- repos are the GitHub repos (owner/name, lower case) the chat belongs to: the
+ -- checkout it ran in plus repos its tool calls touched. NULL means never
+ -- tagged, an empty array means tagged with none. Nullable, so binaries from
+ -- before this column keep writing rows without it.
+ IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'sessions' AND column_name = 'repos') THEN
+  ALTER TABLE sessions ADD COLUMN repos text[];
+ END IF;
 END $$;
 
 CREATE INDEX IF NOT EXISTS sessions_machine_idx ON sessions (machine);
@@ -46,6 +53,9 @@ DO $$ BEGIN
  END IF;
  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'sessions_owner_brain_idx') THEN
   CREATE INDEX sessions_owner_brain_idx ON sessions (owner, brain);
+ END IF;
+ IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'sessions_repos_idx') THEN
+  CREATE INDEX sessions_repos_idx ON sessions USING GIN (repos);
  END IF;
 END $$;
 

@@ -3,6 +3,7 @@ package remote
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -19,8 +20,25 @@ import (
 // isolated SQL database. Only PostgreSQL's JSON cast is removed for SQLite.
 type sqliteConn struct{ db *sql.DB }
 
+// sqlite has no arrays: text[] parameters are stored as JSON text.
+func sqliteSQL(q string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(q, "::jsonb", ""), "::text[]", ""), "now()", "CURRENT_TIMESTAMP")
+}
+
+func sqliteArgs(args []any) []any {
+	out := make([]any, len(args))
+	for i, a := range args {
+		if list, ok := a.([]string); ok {
+			raw, _ := json.Marshal(list)
+			a = string(raw)
+		}
+		out[i] = a
+	}
+	return out
+}
+
 func (c sqliteConn) Exec(ctx context.Context, q string, args ...any) (pgconn.CommandTag, error) {
-	r, err := c.db.ExecContext(ctx, strings.ReplaceAll(strings.ReplaceAll(q, "::jsonb", ""), "now()", "CURRENT_TIMESTAMP"), args...)
+	r, err := c.db.ExecContext(ctx, sqliteSQL(q), sqliteArgs(args)...)
 	if err != nil {
 		return pgconn.CommandTag{}, err
 	}
@@ -28,7 +46,7 @@ func (c sqliteConn) Exec(ctx context.Context, q string, args ...any) (pgconn.Com
 	return pgconn.NewCommandTag(fmt.Sprintf("UPDATE %d", n)), err
 }
 func (c sqliteConn) Query(ctx context.Context, q string, args ...any) (pgx.Rows, error) {
-	r, err := c.db.QueryContext(ctx, strings.ReplaceAll(strings.ReplaceAll(q, "::jsonb", ""), "now()", "CURRENT_TIMESTAMP"), args...)
+	r, err := c.db.QueryContext(ctx, sqliteSQL(q), sqliteArgs(args)...)
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +74,7 @@ func ownershipDB(t *testing.T) sqliteConn {
 	t.Cleanup(func() { db.Close() })
 	db.SetMaxOpenConns(1)
 	_, err = db.Exec(`PRAGMA foreign_keys=ON;
- CREATE TABLE sessions(source text,id text,machine text,provider text,provider_session_id text,cwd text,title text,path text,origin_path text,revision text,clean_fingerprint text,started_at text,updated_at text,body text,turns text,pushed_at text DEFAULT CURRENT_TIMESTAMP,owner text,brain text,PRIMARY KEY(source,id));
+ CREATE TABLE sessions(source text,id text,machine text,provider text,provider_session_id text,cwd text,title text,path text,origin_path text,revision text,clean_fingerprint text,started_at text,updated_at text,body text,turns text,pushed_at text DEFAULT CURRENT_TIMESTAMP,owner text,brain text,repos text,PRIMARY KEY(source,id));
  CREATE TABLE session_machines(source text,id text,machine text,PRIMARY KEY(source,id,machine),FOREIGN KEY(source,id) REFERENCES sessions(source,id) ON DELETE RESTRICT);`)
 	if err != nil {
 		t.Fatal(err)

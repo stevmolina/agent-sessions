@@ -16,6 +16,9 @@ type Session struct {
 	Size                                    int64
 	Revision                                string
 	Turns                                   []Turn
+	// Machine and Repos are filled for rows read from the shared database.
+	Machine string
+	Repos   []string
 }
 
 type Row struct {

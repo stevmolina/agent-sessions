@@ -24,6 +24,7 @@ import (
 	"github.com/usuario/sessions/internal/model"
 	"github.com/usuario/sessions/internal/pushlock"
 	"github.com/usuario/sessions/internal/remote"
+	"github.com/usuario/sessions/internal/repotag"
 	"github.com/usuario/sessions/internal/source"
 	"github.com/usuario/sessions/internal/store"
 	"github.com/usuario/sessions/internal/transcript"
@@ -66,7 +67,9 @@ push options:
 
 push needs SESSIONS_OWNER (your WorkOS user id; env, else Doppler project
 sessions). Each session is filed under a brain by its folder, using
-$SESSIONS_BRAINS_FILE or ~/.config/sessions/brains.json when present.
+~/.agents/sessions/brains.json, else $SESSIONS_BRAINS_FILE, else
+~/.config/sessions/brains.json, when present. Each session is also tagged with
+the GitHub repos it belongs to (its checkout, and repos its commands touched).
 
 import options:
   sessions import FILE.zip... [--push]
@@ -97,6 +100,10 @@ search options:
                        Which coding agent executed it. Direct Codex and a T3
                        thread run by Codex both match --provider codex.
   --cwd PATH           Restrict to this working directory or a subdirectory.
+                       With --remote, any folder containing this text matches.
+  --repo OWNER/NAME    With --remote: chats tagged with this GitHub repo. A
+                       bare name such as pokebots matches any owner.
+  --machine HOST       With --remote: chats pushed from this machine.
   --limit N            Max results (default 20), applied after duplicate collapse.
   --all-copies         Keep exact T3/native duplicates instead of collapsing.
   --remote             Query the Postgres copy instead of the local index.
@@ -192,7 +199,7 @@ func index(out, errOut io.Writer) int {
 }
 func search(args []string, out, errOut io.Writer) int {
 	var query []string
-	sourceFilter, provider, cwd := "", "", ""
+	sourceFilter, provider, cwd, repo, machine := "", "", "", "", ""
 	limit := 20
 	allCopies := false
 	remoteSearch := false
@@ -223,6 +230,18 @@ func search(args []string, out, errOut io.Writer) int {
 				return usage(errOut, "argument --cwd: expected one argument")
 			}
 			cwd = args[i]
+		case "--repo":
+			i++
+			if i >= len(args) {
+				return usage(errOut, "argument --repo: expected one argument")
+			}
+			repo = args[i]
+		case "--machine":
+			i++
+			if i >= len(args) {
+				return usage(errOut, "argument --machine: expected one argument")
+			}
+			machine = args[i]
 		case "--limit":
 			i++
 			if i >= len(args) {
@@ -248,7 +267,10 @@ func search(args []string, out, errOut io.Writer) int {
 		return usage(errOut, "the following arguments are required: query")
 	}
 	if remoteSearch {
-		return searchRemote(strings.Join(query, " "), sourceFilter, provider, cwd, limit, out, errOut)
+		return searchRemote(strings.Join(query, " "), remote.Filter{Source: sourceFilter, Provider: provider, CWD: cwd, Repo: repo, Machine: machine}, limit, out, errOut)
+	}
+	if repo != "" || machine != "" {
+		return usage(errOut, "--repo and --machine search the shared database: add --remote")
 	}
 	db, cleaner, err := openIndex()
 	if err != nil {
@@ -347,10 +369,10 @@ func showLocal(id string, out, errOut io.Writer) int {
 	fmt.Fprint(out, transcript.Format(s, 200000))
 	return 0
 }
-func searchRemote(query, sourceFilter, provider, cwd string, limit int, out, errOut io.Writer) int {
+func searchRemote(query string, filter remote.Filter, limit int, out, errOut io.Writer) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	hits, err := remote.Search(ctx, query, sourceFilter, provider, cwd, limit)
+	hits, err := remote.Search(ctx, query, filter, limit)
 	if err != nil {
 		return fail(errOut, err)
 	}
@@ -369,6 +391,12 @@ func searchRemote(query, sourceFilter, provider, cwd string, limit int, out, err
 		}
 		if h.Title != "" {
 			fmt.Fprintln(out, "  title: "+h.Title)
+		}
+		if h.Machine != "" {
+			fmt.Fprintln(out, "  machine: "+h.Machine)
+		}
+		if len(h.Repos) > 0 {
+			fmt.Fprintln(out, "  repos: "+strings.Join(h.Repos, ", "))
 		}
 		fmt.Fprintln(out, "  snippet: "+strings.Join(strings.Fields(h.Snippet), " "))
 		fmt.Fprintln(out, "  path: "+h.Path)
@@ -563,6 +591,7 @@ func runPush(errOut io.Writer) (pushResult, error) {
 		Verify:      verify,
 		Owner:       owner,
 		Brains:      brains,
+		Repos:       repotag.New().ForPush,
 	})
 	for _, path := range res.stats.SkippedPaths {
 		fmt.Fprintln(errOut, "redaction failed, skipped "+path)
