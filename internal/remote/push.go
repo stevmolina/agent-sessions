@@ -7,6 +7,8 @@ import (
 	"os"
 	"slices"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/usuario/sessions/internal/brainmap"
 	"github.com/usuario/sessions/internal/store"
 )
@@ -107,17 +109,23 @@ func Push(ctx context.Context, rows []store.ExportRow, opts Options) (Stats, err
 	}
 	defer db.Close(ctx)
 
+	// The migration commits on its own before any real work. ALTER TABLE and
+	// CREATE INDEX hold strong table locks until their transaction ends, and the
+	// sync below can run for minutes (it reads transcripts to tag them). A short
+	// lock_timeout makes a blocked migration give up instead of queueing a lock
+	// that every reader would then wait behind.
+	if err := migrateInTx(ctx, db); err != nil {
+		return Stats{}, err
+	}
+
 	tx, err := db.Begin(ctx)
 	if err != nil {
 		return Stats{}, sqlError("begin", err)
 	}
 	defer tx.Rollback(ctx)
-	// Serialize snapshot ownership changes, including migration and orphan removal.
+	// Serialize snapshot ownership changes, including orphan removal.
 	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(1979716451)`); err != nil {
 		return Stats{}, sqlError("lock", err)
-	}
-	if err := migrate(ctx, tx); err != nil {
-		return Stats{}, err
 	}
 	stats, err := syncRows(ctx, tx, rows, opts)
 	if err != nil {
@@ -127,6 +135,27 @@ func Push(ctx context.Context, rows []store.ExportRow, opts Options) (Stats, err
 		return stats, sqlError("commit", err)
 	}
 	return stats, nil
+}
+
+func migrateInTx(ctx context.Context, db *pgx.Conn) error {
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return sqlError("begin", err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `SET LOCAL lock_timeout = '15s'`); err != nil {
+		return sqlError("lock", err)
+	}
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(1979716451)`); err != nil {
+		return sqlError("lock", err)
+	}
+	if err := migrate(ctx, tx); err != nil {
+		return err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return sqlError("commit", err)
+	}
+	return nil
 }
 
 func syncRows(ctx context.Context, db conn, rows []store.ExportRow, opts Options) (Stats, error) {

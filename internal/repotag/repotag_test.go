@@ -59,6 +59,48 @@ func TestFromTextFindsNamedRepos(t *testing.T) {
 	}
 }
 
+func TestOnlyGhAndGitCommandsNameRepos(t *testing.T) {
+	for _, text := range []string{
+		"cp -R src/main dist",
+		"ls -R foo/bar",
+		"curl -sL https://github.com/acme/widgets/raw/main/x.sh",
+		"go get github.com/acme/widgets",
+		"https://github.com/acme/widgets",
+	} {
+		if got := FromText(text); len(got) != 0 {
+			t.Errorf("%q tagged %v", text, got)
+		}
+	}
+	if got := FromText("cd /x && git clone https://github.com/acme/widgets.git"); len(got) != 1 {
+		t.Errorf("git clone: %v", got)
+	}
+	if got := FromText("gh pr list --state open -R acme/widgets | head"); len(got) != 1 {
+		t.Errorf("gh -R: %v", got)
+	}
+}
+
+func TestToolFoldersNeverTagByPath(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HOME", filepath.Join(root, "home"))
+	tool := filepath.Join(root, "home", ".agents")
+	checkout(t, tool, "git@github.com:me/agents.git")
+	brew := filepath.Join(root, "opt", "homebrew")
+	checkout(t, brew, "git@github.com:Homebrew/brew.git")
+	var lines []string
+	for i := 0; i < 5; i++ {
+		lines = append(lines,
+			`{"message":{"content":[{"type":"tool_use","input":{"command":"cat `+tool+`/skills/a.md"}}]}}`,
+			`{"message":{"content":[{"type":"tool_use","input":{"command":"`+brew+`/bin/brew list"}}]}}`)
+	}
+	if got := New().Full(store.ExportRow{Path: writeJSONL(t, lines...)}); len(got) != 0 {
+		t.Fatalf("got %v", got)
+	}
+	// Its own folder still tags a chat that ran in the tool checkout.
+	if got := New().Full(store.ExportRow{CWD: &tool}); len(got) != 1 || got[0] != "me/agents" {
+		t.Fatalf("cwd: %v", got)
+	}
+}
+
 func TestRepoFromConfigPrefersOrigin(t *testing.T) {
 	cfg := "[core]\n\tbare = false\n[remote \"upstream\"]\n\turl = git@github.com:openbot/openbot.git\n[remote \"origin\"]\n\turl = https://github.com/stevmolina/pokebots.git\n"
 	if got := RepoFromConfigText(cfg); got != "stevmolina/pokebots" {

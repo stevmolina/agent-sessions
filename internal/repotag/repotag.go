@@ -26,19 +26,21 @@ const MaxRepos = 10
 // chat that works in a repo touches it many times.
 const pathMentions = 3
 
+type found struct{ repo, root string }
+
 // Resolver turns folders into repos and caches the answer per folder, so a
 // push over thousands of chats reads each git config once.
 type Resolver struct {
 	home string
 	mu   sync.Mutex
-	dirs map[string]string // folder -> repo, "" when none
+	dirs map[string]found // folder -> its repo and checkout root
 }
 
 // New returns a Resolver. home is skipped as a repo root, so a dotfiles repo in
 // the home folder does not tag every chat that ran under it.
 func New() *Resolver {
 	home, _ := os.UserHomeDir()
-	return &Resolver{home: filepath.Clean(home), dirs: map[string]string{}}
+	return &Resolver{home: filepath.Clean(home), dirs: map[string]found{}}
 }
 
 var reserved = map[string]bool{
@@ -54,12 +56,13 @@ const nameChars = `[A-Za-z0-9][A-Za-z0-9_.-]*`
 var (
 	// github.com/o/n, github.com:o/n (ssh), api.github.com/repos/o/n
 	urlRE = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9.-])(?:api\.)?github\.com[/:](?:repos/)?(` + nameChars + `)/(` + nameChars + `)`)
-	// gh ... -R o/n, --repo o/n, --repo=o/n
-	flagRE = regexp.MustCompile(`(?:^|\s)(?:-R|--repo)[\s=]+["']?(` + nameChars + `)/(` + nameChars + `)`)
+	// gh ... -R o/n, --repo o/n, --repo=o/n. Only inside a gh command: cp -R a/b is not a repo.
+	flagRE = regexp.MustCompile(`\bgh\b[^\n;&|]*?\s(?:-R|--repo)[\s=]+["']?(` + nameChars + `)/(` + nameChars + `)`)
 	// gh repo clone|view|fork o/n, gh api repos/o/n
 	ghRE = regexp.MustCompile(`\bgh\s+(?:repo\s+(?:clone|view|fork|sync|edit)\s+|api\s+(?:-\S+\s+)*["']?/?repos/)["']?/?(` + nameChars + `)/(` + nameChars + `)`)
 	// git clone [opts] o/n is not valid git; clone URLs are caught by urlRE.
-	pathRE = regexp.MustCompile(`(?:^|[\s"'=(])((?:~|/)[A-Za-z0-9_@%+=:,.~/-]+)`)
+	gitCmdRE = regexp.MustCompile(`(?:^|[\s;&|(])(?:git|gh)\s`)
+	pathRE   = regexp.MustCompile(`(?:^|[\s"'=(])((?:~|/)[A-Za-z0-9_@%+=:,.~/-]+)`)
 )
 
 // NormalizeRemote turns a git remote URL into "owner/name" in lower case.
@@ -93,7 +96,13 @@ func FromText(text string) []string {
 			out = append(out, repo)
 		}
 	}
-	for _, re := range []*regexp.Regexp{urlRE, flagRE, ghRE} {
+	// A URL tags a repo only in a git or gh command. A curl, a go get or a
+	// fetched page is reading about a repo, not working in it.
+	res := []*regexp.Regexp{flagRE, ghRE}
+	if gitCmdRE.MatchString(text) {
+		res = append(res, urlRE)
+	}
+	for _, re := range res {
 		for _, m := range re.FindAllStringSubmatch(text, -1) {
 			add(m)
 		}
@@ -105,30 +114,35 @@ func FromText(text string) []string {
 // that does not exist on this machine is resolved through its nearest parent
 // that does. Worktrees resolve to the repo they belong to.
 func (r *Resolver) Dir(dir string) string {
+	repo, _ := r.lookup(dir)
+	return repo
+}
+
+func (r *Resolver) lookup(dir string) (repo, root string) {
 	dir = filepath.Clean(strings.TrimSpace(dir))
 	if dir == "" || dir == "." || !filepath.IsAbs(dir) {
-		return ""
+		return "", ""
 	}
 	r.mu.Lock()
-	if repo, ok := r.dirs[dir]; ok {
+	if hit, ok := r.dirs[dir]; ok {
 		r.mu.Unlock()
-		return repo
+		return hit.repo, hit.root
 	}
 	r.mu.Unlock()
 	var walked []string
-	repo := ""
+	var res found
 	for cur := dir; ; cur = filepath.Dir(cur) {
 		r.mu.Lock()
 		cached, ok := r.dirs[cur]
 		r.mu.Unlock()
 		if ok {
-			repo = cached
+			res = cached
 			break
 		}
 		walked = append(walked, cur)
 		if cur != r.home {
 			if cfg := gitConfigPath(cur); cfg != "" {
-				repo = repoFromConfig(cfg)
+				res = found{repoFromConfig(cfg), cur}
 				break
 			}
 		}
@@ -138,10 +152,24 @@ func (r *Resolver) Dir(dir string) string {
 	}
 	r.mu.Lock()
 	for _, d := range walked {
-		r.dirs[d] = repo
+		r.dirs[d] = res
 	}
 	r.mu.Unlock()
-	return repo
+	return res.repo, res.root
+}
+
+// toolFolders are checkouts that tools and setups live in, not projects a chat
+// works on. A path into one never tags its repo; the chat's own folder still can.
+var toolFolders = []string{"/homebrew", "/.agents", "/.claude", "/.codex", "/.cursor", "/.local/share", "/.cache", "/node_modules", "/.nvm", "/.cargo", "/go/pkg/mod", "/.oh-my-zsh"}
+
+func isToolFolder(root string) bool {
+	root = strings.ToLower(filepath.ToSlash(root))
+	for _, marker := range toolFolders {
+		if strings.Contains(root+"/", marker+"/") || strings.HasSuffix(root, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // gitConfigPath returns the config file of the repo whose working tree root is
@@ -304,7 +332,7 @@ func (r *Resolver) scanFile(path string) []string {
 				}
 				seenInCall := map[string]bool{}
 				for _, p := range pathsIn(call, r.home) {
-					if repo := r.Dir(p); repo != "" && !seenInCall[repo] {
+					if repo, root := r.lookup(p); repo != "" && !seenInCall[repo] && !isToolFolder(root) {
 						seenInCall[repo] = true
 						if pathCount[repo] == 0 {
 							pathOrder = append(pathOrder, repo)
@@ -342,7 +370,7 @@ func hasToolMarker(line []byte) bool {
 // inputKeys are the tool input fields that hold commands and paths. Prose
 // fields (file contents, prompts, descriptions) are left out on purpose.
 var inputKeys = map[string]bool{
-	"command": true, "cmd": true, "file_path": true, "path": true, "url": true,
+	"command": true, "cmd": true, "file_path": true, "path": true,
 	"cwd": true, "workdir": true, "directory": true, "notebook_path": true,
 }
 
