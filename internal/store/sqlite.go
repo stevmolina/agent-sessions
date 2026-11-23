@@ -307,11 +307,13 @@ func Upsert(tx *sql.Tx, s *model.Session) error {
 type ExportRow struct {
 	ID, Source, Provider, Path, OriginPath, Title, Revision, Body string
 	ProviderSessionID, CWD, StartedAt, UpdatedAt                  *string
-	Turns                                                         []model.Turn
+	// WorktreePath is where a T3 thread's worktree lives, when it has one.
+	WorktreePath *string
+	Turns        []model.Turn
 }
 
 func List(db *sql.DB) ([]ExportRow, error) {
-	rows, err := db.Query(`SELECT s.id, s.source, s.provider, s.provider_session_id, s.cwd, s.title, s.path, s.origin_path, s.revision, s.started_at, s.updated_at, s.turns, f.body FROM sessions s JOIN sessions_fts f ON f.path = s.path ORDER BY s.source, s.id`)
+	rows, err := db.Query(`SELECT s.id, s.source, s.provider, s.provider_session_id, s.cwd, s.title, s.path, s.origin_path, s.revision, s.started_at, s.updated_at, s.turns, f.body, s.worktree_path FROM sessions s JOIN sessions_fts f ON f.path = s.path ORDER BY s.source, s.id`)
 	if err != nil {
 		return nil, err
 	}
@@ -320,12 +322,13 @@ func List(db *sql.DB) ([]ExportRow, error) {
 	for rows.Next() {
 		var row ExportRow
 		var turns sql.NullString
-		var providerSession, cwd, title, origin, revision, started, updated sql.NullString
-		if err := rows.Scan(&row.ID, &row.Source, &row.Provider, &providerSession, &cwd, &title, &row.Path, &origin, &revision, &started, &updated, &turns, &row.Body); err != nil {
+		var providerSession, cwd, title, origin, revision, started, updated, worktree sql.NullString
+		if err := rows.Scan(&row.ID, &row.Source, &row.Provider, &providerSession, &cwd, &title, &row.Path, &origin, &revision, &started, &updated, &turns, &row.Body, &worktree); err != nil {
 			return nil, err
 		}
 		row.ProviderSessionID = nullString(providerSession)
 		row.CWD = nullString(cwd)
+		row.WorktreePath = nullString(worktree)
 		row.Title = title.String
 		row.OriginPath = origin.String
 		row.Revision = revision.String

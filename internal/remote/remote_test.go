@@ -34,15 +34,29 @@ func TestRemoteRoundTrip(t *testing.T) {
 		_, _ = db.Exec(context.Background(), `DELETE FROM session_machines WHERE id = $1`, row.ID)
 		_, _ = db.Exec(context.Background(), `DELETE FROM sessions WHERE id = $1`, row.ID)
 	})
-	if _, err := Push(ctx, []store.ExportRow{row}, Options{Fingerprint: "v1:test", Machine: "remote-test-machine", AllowDelete: false, Owner: "user_remote_test"}); err != nil {
+	if _, err := Push(ctx, []store.ExportRow{row}, Options{Fingerprint: "v1:test", Machine: "remote-test-machine", AllowDelete: false, Owner: "user_remote_test", Repos: func(store.ExportRow, bool) []string { return []string{"acme/remote-fixture"} }}); err != nil {
 		t.Fatal(err)
 	}
-	hits, err := Search(ctx, "quartz-remote-marker", "claude", "", "", 5)
+	hits, err := Search(ctx, "quartz-remote-marker", Filter{Source: "claude", Repo: "acme/remote-fixture", Machine: "remote-test-machine", CWD: ""}, 5)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(hits) != 1 || hits[0].ID != row.ID || strings.Contains(hits[0].Snippet, "DATABASE_URL") {
+	if len(hits) != 1 || hits[0].ID != row.ID || strings.Contains(hits[0].Snippet, "DATABASE_URL") || hits[0].Machine != "remote-test-machine" || len(hits[0].Repos) != 1 {
 		t.Fatalf("hits=%d", len(hits))
+	}
+	for _, f := range []Filter{{Repo: "remote-fixture"}, {Repo: "ACME/Remote-Fixture"}, {CWD: "no-such-folder"}, {Repo: "other-repo"}, {Machine: "elsewhere"}} {
+		f.Source = "claude"
+		hits, err := Search(ctx, "quartz-remote-marker", f, 5)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := 1
+		if f.CWD != "" || f.Repo == "other-repo" || f.Machine != "" {
+			want = 0
+		}
+		if len(hits) != want {
+			t.Fatalf("filter %+v: %d hits, want %d", f, len(hits), want)
+		}
 	}
 	shown, err := Show(ctx, "claude", row.ID)
 	if err != nil || len(shown) != 1 || shown[0].Turns[0].Text != "quartz-remote-marker" {
@@ -121,5 +135,21 @@ func TestRemoteConcurrentOwnership(t *testing.T) {
 	stats, err = Push(ctx, nil, Options{Fingerprint: "test-policy", Machine: machines[1], AllowDelete: true, Owner: "user_remote_test"})
 	if err != nil || stats.Deleted != 1 {
 		t.Fatalf("last removal=%+v err=%v", stats, err)
+	}
+}
+
+func TestEscapeLikeAndRepoArg(t *testing.T) {
+	if got := escapeLike(`50%_a\b`); got != `50\%\_a\\b` {
+		t.Fatal(got)
+	}
+	for in, want := range map[string]string{
+		"StevMolina/Pokebots":                        "stevmolina/pokebots",
+		"https://github.com/StevMolina/pokebots.git": "stevmolina/pokebots",
+		"git@github.com:a/b.git":                     "a/b",
+		"pokebots":                                   "pokebots",
+	} {
+		if got := NormalizeRepoArg(in); got != want {
+			t.Errorf("%q: got %q want %q", in, got, want)
+		}
 	}
 }

@@ -7,7 +7,11 @@ import "errors"
 type Row struct {
 	Source, ID, Revision, Fingerprint string
 	Owner, Brain                      string
-	Owned                             bool
+	// Repos are the GitHub repos tagged on the remote row. ReposKnown is false
+	// when the column is NULL (never tagged), true for an empty array.
+	Repos      []string
+	ReposKnown bool
+	Owned      bool
 }
 
 // CheckFingerprint refuses an index that was not cleaned with Doppler.

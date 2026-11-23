@@ -209,7 +209,7 @@ func TestOwnerNeverChanges(t *testing.T) {
 		t.Fatalf("taken over: owner=%v brain=%v", owner, brain)
 	}
 	// The retag statement itself refuses another owner's row.
-	if _, err := db.Exec(ctx, retagSQL, "user_someone_else", "x/y", row.Source, row.ID); err != nil {
+	if _, err := db.Exec(ctx, retagSQL, "user_someone_else", "x/y", row.Source, row.ID, nil); err != nil {
 		t.Fatal(err)
 	}
 	if owner, brain = readTags(t, db.db, "client"); owner.String != testOwner || brain.String != "someone/acme-knowledge" {
@@ -224,5 +224,145 @@ func TestOwnerNeverChanges(t *testing.T) {
 	}
 	if owner, brain = readTags(t, db.db, "client"); owner.String != "user_someone_else" || brain.String != "someone-else/notes" {
 		t.Fatalf("unowned row not claimed: owner=%v brain=%v", owner, brain)
+	}
+}
+
+func readRepos(t *testing.T, db *sql.DB, id string) ([]string, bool) {
+	t.Helper()
+	var raw sql.NullString
+	if err := db.QueryRow(`SELECT repos FROM sessions WHERE id = ?`, id).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if !raw.Valid {
+		return nil, false
+	}
+	list, _ := parseReposJSON([]byte(raw.String))
+	return list, true
+}
+
+// fakeRepos tags a row by its cwd for the cheap pass, and adds a transcript tag
+// on the full pass. calls counts the full passes.
+func fakeRepos(calls *int) func(store.ExportRow, bool) []string {
+	return func(row store.ExportRow, full bool) []string {
+		var out []string
+		if row.CWD != nil && *row.CWD == "/data/OpenBot/Agents/agent-1" {
+			out = append(out, "stevmolina/pokebots")
+		}
+		if full {
+			*calls++
+			out = append(out, "acme/touched")
+		}
+		return out
+	}
+}
+
+func TestNewRowsCarryRepos(t *testing.T) {
+	db := ownershipDB(t)
+	ctx := context.Background()
+	calls := 0
+	opts := testOpts("machine-a", true)
+	opts.Repos = fakeRepos(&calls)
+	rows := []store.ExportRow{withCWD(pushFixture(), "agent", "/data/OpenBot/Agents/agent-1")}
+	if _, err := syncRows(ctx, db, rows, opts); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := readRepos(t, db.db, "agent")
+	if !ok || len(got) != 2 || got[0] != "stevmolina/pokebots" || got[1] != "acme/touched" {
+		t.Fatalf("repos=%v ok=%v", got, ok)
+	}
+}
+
+func TestOldRowsAreTaggedOnNextPushOnceAndWithoutRescan(t *testing.T) {
+	db := &countingConn{sqliteConn: ownershipDB(t)}
+	ctx := context.Background()
+	rows := []store.ExportRow{withCWD(pushFixture(), "old", "/data/OpenBot/Agents/agent-1")}
+	// An older binary pushed it: no repos column value.
+	if _, err := syncRows(ctx, db, rows, testOpts("machine-a", true)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := readRepos(t, db.db, "old"); ok {
+		t.Fatal("old binary should leave repos NULL")
+	}
+	calls := 0
+	opts := testOpts("machine-a", true)
+	opts.Repos = fakeRepos(&calls)
+	stats, err := syncRows(ctx, db, rows, opts)
+	if err != nil || stats.Uploaded != 0 || stats.Retagged != 1 || calls != 1 {
+		t.Fatalf("stats=%+v err=%v calls=%d", stats, err, calls)
+	}
+	if got, ok := readRepos(t, db.db, "old"); !ok || len(got) != 2 {
+		t.Fatalf("repos=%v ok=%v", got, ok)
+	}
+	// Tagged now: the next push does no transcript pass and writes nothing.
+	db.execs = 0
+	stats, err = syncRows(ctx, db, rows, opts)
+	if err != nil || stats.Retagged != 0 || calls != 1 || db.execs != 0 {
+		t.Fatalf("stats=%+v err=%v calls=%d execs=%d", stats, err, calls, db.execs)
+	}
+}
+
+func TestRowWithNoReposIsMarkedCheckedNotRescanned(t *testing.T) {
+	db := ownershipDB(t)
+	ctx := context.Background()
+	rows := []store.ExportRow{pushFixture()}
+	if _, err := syncRows(ctx, db, rows, testOpts("machine-a", true)); err != nil {
+		t.Fatal(err)
+	}
+	opts := testOpts("machine-a", true)
+	opts.Repos = func(store.ExportRow, bool) []string { return nil }
+	if _, err := syncRows(ctx, db, rows, opts); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := readRepos(t, db.db, "shared")
+	if !ok || len(got) != 0 {
+		t.Fatalf("want an empty array, got %v ok=%v", got, ok)
+	}
+}
+
+func TestAnotherMachineNeverRemovesRepos(t *testing.T) {
+	db := ownershipDB(t)
+	ctx := context.Background()
+	rows := []store.ExportRow{withCWD(pushFixture(), "shared-chat", "/data/OpenBot/Agents/agent-1")}
+	calls := 0
+	a := testOpts("machine-a", true)
+	a.Repos = fakeRepos(&calls)
+	if _, err := syncRows(ctx, db, rows, a); err != nil {
+		t.Fatal(err)
+	}
+	// Machine b has no checkout and finds nothing, and the content is unchanged.
+	b := testOpts("machine-b", true)
+	b.Repos = func(store.ExportRow, bool) []string { return nil }
+	if _, err := syncRows(ctx, db, rows, b); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := readRepos(t, db.db, "shared-chat"); len(got) != 2 {
+		t.Fatalf("repos=%v", got)
+	}
+	// A changed row re-uploaded by b keeps the tags too.
+	rows[0].Revision = "2"
+	if _, err := syncRows(ctx, db, rows, b); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := readRepos(t, db.db, "shared-chat"); len(got) != 2 {
+		t.Fatalf("after upload repos=%v", got)
+	}
+}
+
+func TestOtherPersonsRowKeepsItsRepos(t *testing.T) {
+	db := ownershipDB(t)
+	ctx := context.Background()
+	rows := []store.ExportRow{withCWD(pushFixture(), "theirs", "/data/OpenBot/Agents/agent-1")}
+	if _, err := syncRows(ctx, db, rows, testOpts("machine-a", true)); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	mine := testOpts("machine-b", true)
+	mine.Owner = "user_someone_else"
+	mine.Repos = fakeRepos(&calls)
+	if _, err := syncRows(ctx, db, rows, mine); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := readRepos(t, db.db, "theirs"); ok {
+		t.Fatal("a second person's push must not tag the first person's row")
 	}
 }

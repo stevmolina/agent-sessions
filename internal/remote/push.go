@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"slices"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/usuario/sessions/internal/brainmap"
 	"github.com/usuario/sessions/internal/store"
@@ -12,9 +15,9 @@ import (
 
 const upsertSQL = `INSERT INTO sessions (
   source, id, machine, provider, provider_session_id, cwd, title, path, origin_path,
-  revision, clean_fingerprint, started_at, updated_at, body, turns, owner, brain
+  revision, clean_fingerprint, started_at, updated_at, body, turns, owner, brain, repos
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16, $17
+  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18::text[]
 ) ON CONFLICT (source, id) DO UPDATE SET
   machine = EXCLUDED.machine,
   provider = EXCLUDED.provider,
@@ -32,11 +35,13 @@ const upsertSQL = `INSERT INTO sessions (
   owner = COALESCE(sessions.owner, EXCLUDED.owner),
   brain = CASE WHEN sessions.owner IS NULL OR sessions.owner = EXCLUDED.owner
     THEN COALESCE(EXCLUDED.brain, sessions.brain) ELSE sessions.brain END,
+  repos = CASE WHEN sessions.owner IS NULL OR sessions.owner = EXCLUDED.owner
+    THEN COALESCE(EXCLUDED.repos, sessions.repos) ELSE sessions.repos END,
   pushed_at = now()`
 
 const remoteStateSQL = `SELECT s.source, s.id,
  CASE WHEN s.turns = '[]'::jsonb THEN NULL ELSE s.revision END,
- s.clean_fingerprint, s.owner, s.brain,
+ s.clean_fingerprint, s.owner, s.brain, s.repos,
  EXISTS (SELECT 1 FROM session_machines m WHERE m.source=s.source AND m.id=s.id AND m.machine=$1)
  FROM sessions s`
 const addOwnershipSQL = `INSERT INTO session_machines(source,id,machine) VALUES($1,$2,$3) ON CONFLICT DO NOTHING`
@@ -46,7 +51,7 @@ const removeOwnershipSQL = `DELETE FROM session_machines WHERE machine=$1 AND so
 // does not take it over. An empty brain ($2 NULL) never clears a brain another
 // machine's map set, so two machines with different maps cannot undo each
 // other on every push. The WHERE repeats the owner check the caller made.
-const retagSQL = `UPDATE sessions SET owner=COALESCE(owner, $1), brain=COALESCE($2, brain)
+const retagSQL = `UPDATE sessions SET owner=COALESCE(owner, $1), brain=COALESCE($2, brain), repos=COALESCE($5::text[], repos)
  WHERE source=$3 AND id=$4 AND (owner IS NULL OR owner=$1)`
 const deleteOrphanSQL = `DELETE FROM sessions AS s WHERE s.source=$1 AND s.id=$2 AND NOT EXISTS (SELECT 1 FROM session_machines m WHERE m.source=s.source AND m.id=s.id)`
 
@@ -71,6 +76,11 @@ type Options struct {
 	Owner string
 	// Brains files each row under a brain by its cwd. Nil files none.
 	Brains *brainmap.Map
+	// Repos tags each row with the GitHub repos it belongs to. Nil tags none and
+	// leaves the column alone. full is true when the row has never been tagged
+	// or is being uploaded, so the transcript may be read; false asks for the
+	// cheap folder-only answer.
+	Repos func(row store.ExportRow, full bool) []string
 }
 
 var errNoOwner = errors.New("refusing to push: no owner (set SESSIONS_OWNER)")
@@ -99,17 +109,23 @@ func Push(ctx context.Context, rows []store.ExportRow, opts Options) (Stats, err
 	}
 	defer db.Close(ctx)
 
+	// The migration commits on its own before any real work. ALTER TABLE and
+	// CREATE INDEX hold strong table locks until their transaction ends, and the
+	// sync below can run for minutes (it reads transcripts to tag them). A short
+	// lock_timeout makes a blocked migration give up instead of queueing a lock
+	// that every reader would then wait behind.
+	if err := migrateInTx(ctx, db); err != nil {
+		return Stats{}, err
+	}
+
 	tx, err := db.Begin(ctx)
 	if err != nil {
 		return Stats{}, sqlError("begin", err)
 	}
 	defer tx.Rollback(ctx)
-	// Serialize snapshot ownership changes, including migration and orphan removal.
+	// Serialize snapshot ownership changes, including orphan removal.
 	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(1979716451)`); err != nil {
 		return Stats{}, sqlError("lock", err)
-	}
-	if err := migrate(ctx, tx); err != nil {
-		return Stats{}, err
 	}
 	stats, err := syncRows(ctx, tx, rows, opts)
 	if err != nil {
@@ -119,6 +135,27 @@ func Push(ctx context.Context, rows []store.ExportRow, opts Options) (Stats, err
 		return stats, sqlError("commit", err)
 	}
 	return stats, nil
+}
+
+func migrateInTx(ctx context.Context, db *pgx.Conn) error {
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return sqlError("begin", err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `SET LOCAL lock_timeout = '15s'`); err != nil {
+		return sqlError("lock", err)
+	}
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(1979716451)`); err != nil {
+		return sqlError("lock", err)
+	}
+	if err := migrate(ctx, tx); err != nil {
+		return err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return sqlError("commit", err)
+	}
+	return nil
 }
 
 func syncRows(ctx context.Context, db conn, rows []store.ExportRow, opts Options) (Stats, error) {
@@ -172,10 +209,18 @@ func syncRows(ctx context.Context, db conn, rows []store.ExportRow, opts Options
 	stats.Unchanged = len(local) - len(toUpload)
 	uploading := make(map[string]bool, len(toUpload))
 	upserts := make([][]any, 0, len(toUpload))
+	remoteByKey := make(map[string]Row, len(remoteRows))
+	for _, row := range remoteRows {
+		remoteByKey[key(row)] = row
+	}
 	for _, item := range toUpload {
 		uploading[key(item)] = true
 		row := byKey[key(item)]
-		args, err := upsertArgs(row, machine, fingerprint, opts.Owner, brainOf(opts.Brains, row))
+		var repos []string
+		if opts.Repos != nil {
+			repos = mergeRepos(remoteByKey[key(item)].Repos, opts.Repos(row, true))
+		}
+		args, err := upsertArgs(row, machine, fingerprint, opts.Owner, brainOf(opts.Brains, row), repos)
 		if err != nil {
 			return stats, err
 		}
@@ -191,10 +236,6 @@ func syncRows(ctx context.Context, db conn, rows []store.ExportRow, opts Options
 	// rows whose tags differ are written, so a push with no changes writes nothing.
 	// A row this machine cannot file keeps the brain another machine gave it,
 	// and a row someone else owns is left alone.
-	remoteByKey := make(map[string]Row, len(remoteRows))
-	for _, row := range remoteRows {
-		remoteByKey[key(row)] = row
-	}
 	var retags [][]any
 	for _, item := range local {
 		if uploading[key(item)] {
@@ -209,8 +250,19 @@ func syncRows(ctx context.Context, db conn, rows []store.ExportRow, opts Options
 		}
 		brain := brainOf(opts.Brains, byKey[key(item)])
 		brainStale := brain != "" && prev.Brain != brain
-		if prev.Owner == "" || brainStale {
-			retags = append(retags, []any{opts.Owner, nullable(brain), item.Source, item.ID})
+		var repos any
+		reposStale := false
+		if opts.Repos != nil {
+			// Never-tagged rows get the full transcript scan once; tagged rows
+			// only re-check the folder, which is cheap.
+			merged := mergeRepos(prev.Repos, opts.Repos(byKey[key(item)], !prev.ReposKnown))
+			if !prev.ReposKnown || !sameRepos(prev.Repos, merged) {
+				reposStale = true
+				repos = merged
+			}
+		}
+		if prev.Owner == "" || brainStale || reposStale {
+			retags = append(retags, []any{opts.Owner, nullable(brain), item.Source, item.ID, repos})
 		}
 	}
 	if _, err := execAll(ctx, db, "retag", retagSQL, retags, ownershipChunk); err != nil {
@@ -274,7 +326,8 @@ func loadRemote(ctx context.Context, db conn, machine string) ([]Row, error) {
 	for rows.Next() {
 		var row Row
 		var revision, fingerprint, owner, brain *string
-		if err := rows.Scan(&row.Source, &row.ID, &revision, &fingerprint, &owner, &brain, &row.Owned); err != nil {
+		var repos any
+		if err := rows.Scan(&row.Source, &row.ID, &revision, &fingerprint, &owner, &brain, &repos, &row.Owned); err != nil {
 			return nil, sqlError("read", err)
 		}
 		if revision != nil {
@@ -289,6 +342,7 @@ func loadRemote(ctx context.Context, db conn, machine string) ([]Row, error) {
 		if brain != nil {
 			row.Brain = *brain
 		}
+		row.Repos, row.ReposKnown = parseRepos(repos)
 		out = append(out, row)
 	}
 	if err := rows.Err(); err != nil {
@@ -298,7 +352,7 @@ func loadRemote(ctx context.Context, db conn, machine string) ([]Row, error) {
 }
 
 func upsert(ctx context.Context, db conn, row store.ExportRow, machine, fingerprint, owner, brain string) error {
-	args, err := upsertArgs(row, machine, fingerprint, owner, brain)
+	args, err := upsertArgs(row, machine, fingerprint, owner, brain, nil)
 	if err != nil {
 		return err
 	}
@@ -306,7 +360,43 @@ func upsert(ctx context.Context, db conn, row store.ExportRow, machine, fingerpr
 	return err
 }
 
-func upsertArgs(row store.ExportRow, machine, fingerprint, owner, brain string) ([]any, error) {
+// mergeRepos keeps every tag a row already has and adds new ones, so a machine
+// that lacks a checkout never removes a tag another machine found. Capped.
+func mergeRepos(prev, found []string) []string {
+	out := append([]string{}, prev...)
+	for _, repo := range found {
+		if len(out) >= maxRepos {
+			break
+		}
+		if !slices.Contains(out, repo) {
+			out = append(out, repo)
+		}
+	}
+	return out
+}
+
+const maxRepos = 10
+
+func sameRepos(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	x, y := slices.Clone(a), slices.Clone(b)
+	slices.Sort(x)
+	slices.Sort(y)
+	return slices.Equal(x, y)
+}
+
+// reposArg is the text[] parameter: NULL when no tags were computed, so an old
+// value stays, and an empty array when the row was checked and has none.
+func reposArg(repos []string) any {
+	if repos == nil {
+		return nil
+	}
+	return repos
+}
+
+func upsertArgs(row store.ExportRow, machine, fingerprint, owner, brain string, repos []string) ([]any, error) {
 	payload, err := json.Marshal(turnsOf(row))
 	if err != nil {
 		return nil, errors.New("upsert failed")
@@ -314,6 +404,41 @@ func upsertArgs(row store.ExportRow, machine, fingerprint, owner, brain string) 
 	return []any{
 		row.Source, row.ID, machine, row.Provider, row.ProviderSessionID, row.CWD, row.Title, row.Path, row.OriginPath,
 		row.Revision, fingerprint, parseTime(row.StartedAt), parseTime(row.UpdatedAt), row.Body, payload,
-		nullable(owner), nullable(brain),
+		nullable(owner), nullable(brain), reposArg(repos),
 	}, nil
+}
+
+// parseRepos reads a text[] column scanned into any. PostgreSQL arrives as
+// []any; the SQLite test double stores JSON text.
+func parseRepos(v any) ([]string, bool) {
+	switch t := v.(type) {
+	case nil:
+		return nil, false
+	case []string:
+		return t, true
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, x := range t {
+			if s, ok := x.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out, true
+	case string:
+		return parseReposJSON([]byte(t))
+	case []byte:
+		return parseReposJSON(t)
+	}
+	return nil, false
+}
+
+func parseReposJSON(raw []byte) ([]string, bool) {
+	var out []string
+	if json.Unmarshal(raw, &out) != nil {
+		return nil, false
+	}
+	if out == nil {
+		out = []string{}
+	}
+	return out, true
 }

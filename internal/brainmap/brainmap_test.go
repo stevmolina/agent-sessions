@@ -103,6 +103,9 @@ func TestLoadFile(t *testing.T) {
 }
 
 func TestPathFollowsEnv(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("SESSIONS_BRAINS_FILE", "/tmp/custom-brains.json")
 	if Path() != "/tmp/custom-brains.json" {
 		t.Fatal(Path())
@@ -110,5 +113,38 @@ func TestPathFollowsEnv(t *testing.T) {
 	t.Setenv("SESSIONS_BRAINS_FILE", "")
 	if !strings.HasSuffix(filepath.ToSlash(Path()), ".config/sessions/brains.json") {
 		t.Fatal(Path())
+	}
+}
+
+func TestPathPrefersTheSharedAgentsFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	custom := filepath.Join(home, "custom.json")
+	t.Setenv("SESSIONS_BRAINS_FILE", "")
+	old := filepath.Join(home, ".config", "sessions", "brains.json")
+	shared := filepath.Join(home, ".agents", "sessions", "brains.json")
+	write := func(p string) {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(`{"default":"a/b"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := Path(); got != old {
+		t.Fatalf("nothing exists: got %s want the old default %s", got, old)
+	}
+	write(old)
+	if got := Path(); got != old {
+		t.Fatalf("got %s want %s", got, old)
+	}
+	t.Setenv("SESSIONS_BRAINS_FILE", custom)
+	if got := Path(); got != custom {
+		t.Fatalf("env file beats the old one: got %s", got)
+	}
+	write(shared)
+	if got := Path(); got != shared {
+		t.Fatalf("shared file wins: got %s", got)
 	}
 }

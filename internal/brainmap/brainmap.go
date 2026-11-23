@@ -24,20 +24,36 @@ type Map struct {
 	Rules   []Rule `json:"rules"`
 }
 
-// Path is $SESSIONS_BRAINS_FILE, else ~/.config/sessions/brains.json.
-func Path() string {
+// Paths lists where the map may live, best first: the one shared with every
+// machine through ~/.agents, then $SESSIONS_BRAINS_FILE, then the older
+// per-machine ~/.config/sessions/brains.json.
+func Paths() []string {
+	home, _ := os.UserHomeDir()
+	out := []string{filepath.Join(home, ".agents", "sessions", "brains.json")}
 	if value := strings.TrimSpace(os.Getenv("SESSIONS_BRAINS_FILE")); value != "" {
 		if value == "~" || strings.HasPrefix(value, "~/") {
-			home, _ := os.UserHomeDir()
-			return filepath.Join(home, strings.TrimPrefix(value, "~"))
+			value = filepath.Join(home, strings.TrimPrefix(value, "~"))
 		}
-		return value
+		out = append(out, value)
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "sessions", "brains.json")
+	return append(out, filepath.Join(home, ".config", "sessions", "brains.json"))
 }
 
-// Load reads the map at Path. A missing file is an empty map, not an error.
+// Path is the file Load reads: the shared ~/.agents file when it exists, else
+// $SESSIONS_BRAINS_FILE when set (even if the file is missing, so a typo is
+// reported by name), else the older ~/.config default.
+func Path() string {
+	paths := Paths()
+	if _, err := os.Stat(paths[0]); err == nil {
+		return paths[0]
+	}
+	if len(paths) == 3 { // the variable is set
+		return paths[1]
+	}
+	return paths[len(paths)-1]
+}
+
+// Load reads the map at Path. No file anywhere is an empty map, not an error.
 func Load() (*Map, error) { return LoadFile(Path()) }
 
 // LoadFile reads one map. A missing file is an empty map; a malformed one is an error.
