@@ -65,7 +65,9 @@ func BackfillCards(ctx context.Context, ok func(string) bool, dryRun bool) (Back
 			CWD: deref(cwd), StartedAt: timeText(started), UpdatedAt: timeText(updated),
 			Title: deref(title), Turns: turns,
 		})
-		if digestOld != nil && *digestOld == res.Digest {
+		// An older binary that pushed after a backfill keeps the digest but writes
+		// its raw title back, so the title is compared too.
+		if digestOld != nil && *digestOld == res.Digest && deref(title) == res.Title {
 			continue
 		}
 		if ok != nil && (!ok(res.Title) || !ok(res.Card)) {
