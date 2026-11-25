@@ -2,7 +2,7 @@
 
 Search local coding-agent transcripts from the command line.
 
-The index covers native Cursor, Claude Code, and Codex JSONL files, plus T3 Code threads from `state.sqlite`. T3 is an extra entry point, not a replacement for those native files. Conversations from ChatGPT, Claude.ai and Grok can be added from their data exports with `sessions import`.
+The index covers native Cursor, Claude Code, and Codex JSONL files, plus T3 Code threads from `state.sqlite`, and chats from Antigravity, Grok CLI and Muse (see [Agent chats on this computer](#agent-chats-on-this-computer)). T3 is an extra entry point, not a replacement for those native files. Conversations from ChatGPT, Claude.ai and Grok can be added from their data exports with `sessions import`.
 
 ## Install
 
@@ -30,6 +30,7 @@ sessions push
 sessions push --trigger
 sessions import EXPORT.zip... [--push]
 sessions health
+sessions backfill-cards [--dry-run]
 sessions version
 sessions search "query" --remote
 sessions show SOURCE:ID --remote
@@ -45,6 +46,25 @@ sessions mcp
 `index` and `search` redact secrets into the local index before storing text. Transcript files are left unchanged, and local `show` still prints the raw file. `push` uploads the cleaned index. See [docs/remote-sync.md](docs/remote-sync.md).
 
 Reading your sessions from Claude, ChatGPT or another AI moved into Agent Brain. Connect `https://brain.mcpbox.dev/mcp` and use its `search_sessions` and `show_session` tools; it reads the same pushed table and shows each person only their own rows. `sessions mcp` now only serves the public pages and `/healthz`, and answers `/mcp` with 410 Gone and the new address. See [Access](docs/remote-sync.md#access).
+
+## Titles and cards
+
+Every pushed row has a clean `title` and a `card`, both built from the redacted turns with no model call (`internal/digest`).
+
+- **Title.** The first real request, at most 80 characters. Injected blocks are removed first: `<openbot_saved_memories>` and the other `<openbot_*>` blocks, `<system-reminder>`, the `# AGENTS.md instructions` block, `<environment_context>`, `--- current message ---` replays, hook output, skill and command wrappers, `<t3_context>`, attachment lines. A turn that was only context is skipped. A pasted brief is kept, since it is the request. T3 threads, and imported ChatGPT, Claude.ai and Grok chats, keep their own stored title, cleaned the same way.
+- **Card.** Three to six short lines, in `sessions.card` (`card_updated_at` is when it was written): `Where` (brain, repo or folder, machine, source, date), `Asked` (the title plus the follow-up count), `Decided` (the latest assistant sentence that states a decision or cause), `Shipped` (pull requests the assistant says it opened or merged, and commits it says were merged) and `State` (how the chat ended). A line with nothing to say is left out.
+- **When.** `push` builds both for a session that is new or changed. A row whose content did not change gets them once, in place, when its `digest` differs; the digest is a hash of the title and the card's content lines (not the machine or the brain), so a second push writes nothing. The rules are versioned (`digest.Version`): a new version refreshes every card on the next push.
+- **Backfill.** `sessions backfill-cards` rewrites titles and cards for every row in the shared database from the turns stored there, including rows other machines pushed. It needs the owner database URL and Doppler (the title and card pass the same redaction check). `--dry-run` only counts. Run it again any time: rows that already match are left alone. The first run on 2,523 rows took about 2 minutes, most of it reading the turns over the network.
+
+## Agent chats on this computer
+
+| Source | Where it reads | Provider |
+|---|---|---|
+| `antigravity` | `~/.gemini/antigravity*/conversations/<id>.db` (SQLite, protobuf steps: type 14 is the person, 15 the model) | `antigravity` |
+| `grok-cli` | `~/.grok/sessions/<folder>/<id>/chat_history.jsonl` and `summary.json`; sessions with no typed prompt, and Grok's own memory jobs, are left out | `grok` |
+| `muse` | `~/.local/share/muse/sessions/YYYY/MM/DD/<id>/session.jsonl` (event log) | `muse` |
+
+Only the person's and the model's text is kept; tool output and reasoning are dropped. They go through the same redaction as every other source, and `internal/indexer/native_redaction_test.go` checks that a token in each of them never reaches the index. `grok-cli` is a different source from `grok`, which stays for chats imported from an export. Agent hooks start a push with `sessions push --trigger`.
 
 ## Owner and brain
 
@@ -102,6 +122,9 @@ The zip is treated as untrusted: it is read in memory, file names inside it are 
 | Imported ChatGPT export | `chatgpt` | `chatgpt` |
 | Imported Claude.ai export | `claude-ai` | `claude-ai` |
 | Imported Grok export | `grok` | `grok` |
+| Antigravity conversation | `antigravity` | `antigravity` |
+| Grok CLI session | `grok-cli` | `grok` |
+| Muse session | `muse` | `muse` |
 
 ```bash
 sessions search "query" --source codex
@@ -145,6 +168,9 @@ T3 often has a native Codex/Claude/Cursor transcript for the same turn. When `pr
 | `SESSIONS_CODEX_ARCHIVE_ROOT` | `~/.codex/archived_sessions` |
 | `SESSIONS_T3_ROOT` | `~/.t3/userdata` |
 | `SESSIONS_IMPORTS_ROOT` | `~/.local/share/sessions/imports` |
+| `SESSIONS_ANTIGRAVITY_ROOT` | `~/.gemini` |
+| `SESSIONS_GROK_ROOT` | `~/.grok/sessions` |
+| `SESSIONS_MUSE_ROOT` | `~/.local/share/muse/sessions` |
 | `SESSIONS_BRAINS_FILE` | `~/.config/sessions/brains.json` |
 
 `SESSIONS_T3_ROOT` may be the userdata directory or a `state.sqlite` file. The adapter reads that database and does not write to it.

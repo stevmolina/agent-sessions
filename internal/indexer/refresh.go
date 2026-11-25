@@ -79,7 +79,10 @@ func refresh(db *sql.DB, cleaner Cleaner, adapters []source.SourceAdapter) (Stat
 			s, err := adapter.Load(item)
 			if errors.Is(err, source.ErrSkipped) {
 				stats.Skipped++
-				stats.Warnings = append(stats.Warnings, "skipped "+err.Error())
+				var skip *source.SkipError
+				if !errors.As(err, &skip) || !skip.Quiet {
+					stats.Warnings = append(stats.Warnings, "skipped "+err.Error())
+				}
 				if exists {
 					if err := store.Delete(tx, item.Locator); err != nil {
 						return stats, err

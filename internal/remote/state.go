@@ -34,7 +34,7 @@ const HeartbeatInterval = 6 * time.Hour
 const FailureHeartbeatInterval = time.Hour
 
 // stateFormat changes when PushState's meaning changes; an older file is ignored.
-const stateFormat = 1
+const stateFormat = 2
 
 // PushState is what the last successful push left in the shared database for
 // this machine's rows. It lives in the cache folder (push-state.json). The next
@@ -220,6 +220,9 @@ func (s *PushState) Pending(rows []store.ExportRow, opts Options, binary, databa
 		}
 		if _, stale := retagFor(prev, byKey[key(item)], opts); stale {
 			return "tags changed"
+		}
+		if _, stale := cardFor(prev, byKey[key(item)], opts, time.Time{}); stale {
+			return "cards changed"
 		}
 		if !prev.Owned {
 			return "sessions to claim"

@@ -310,6 +310,9 @@ type ExportRow struct {
 	// WorktreePath is where a T3 thread's worktree lives, when it has one.
 	WorktreePath *string
 	Turns        []model.Turn
+	// Card and Digest are derived at push time (remote.Annotate), never stored
+	// in the local index.
+	Card, Digest string
 }
 
 func List(db *sql.DB) ([]ExportRow, error) {

@@ -7,6 +7,9 @@ import "errors"
 type Row struct {
 	Source, ID, Revision, Fingerprint string
 	Owner, Brain                      string
+	// Digest is the hash of the title and card the row carries ("" for NULL on
+	// the remote side, and for a local row that was not annotated).
+	Digest string
 	// Repos are the GitHub repos tagged on the remote row. ReposKnown is false
 	// when the column is NULL (never tagged), true for an empty array.
 	Repos      []string

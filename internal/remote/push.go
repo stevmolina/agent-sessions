@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"slices"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -15,9 +16,11 @@ import (
 
 const upsertSQL = `INSERT INTO sessions (
   source, id, machine, provider, provider_session_id, cwd, title, path, origin_path,
-  revision, clean_fingerprint, started_at, updated_at, body, turns, owner, brain, repos
+  revision, clean_fingerprint, started_at, updated_at, body, turns, owner, brain, repos,
+  card, card_updated_at, digest
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18::text[]
+  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18::text[],
+  $19, $20, $21
 ) ON CONFLICT (source, id) DO UPDATE SET
   machine = EXCLUDED.machine,
   provider = EXCLUDED.provider,
@@ -37,11 +40,14 @@ const upsertSQL = `INSERT INTO sessions (
     THEN COALESCE(EXCLUDED.brain, sessions.brain) ELSE sessions.brain END,
   repos = CASE WHEN sessions.owner IS NULL OR sessions.owner = EXCLUDED.owner
     THEN COALESCE(EXCLUDED.repos, sessions.repos) ELSE sessions.repos END,
+  card = COALESCE(EXCLUDED.card, sessions.card),
+  card_updated_at = CASE WHEN EXCLUDED.card IS NULL THEN sessions.card_updated_at ELSE EXCLUDED.card_updated_at END,
+  digest = COALESCE(EXCLUDED.digest, sessions.digest),
   pushed_at = now()`
 
 const remoteStateSQL = `SELECT s.source, s.id,
  CASE WHEN s.turns = '[]'::jsonb THEN NULL ELSE s.revision END,
- s.clean_fingerprint, s.owner, s.brain, s.repos,
+ s.clean_fingerprint, s.owner, s.brain, s.repos, s.digest,
  EXISTS (SELECT 1 FROM session_machines m WHERE m.source=s.source AND m.id=s.id AND m.machine=$1)
  FROM sessions s`
 
@@ -49,9 +55,16 @@ const remoteStateSQL = `SELECT s.source, s.id,
 // after a push for PushState: a row just uploaded with no turns must not look
 // changed on every later run.
 const afterStateSQL = `SELECT s.source, s.id, s.revision,
- s.clean_fingerprint, s.owner, s.brain, s.repos,
+ s.clean_fingerprint, s.owner, s.brain, s.repos, s.digest,
  EXISTS (SELECT 1 FROM session_machines m WHERE m.source=s.source AND m.id=s.id AND m.machine=$1)
  FROM sessions s`
+
+// updateCardSQL rewrites the title and card of a row whose content did not
+// change. It leaves a row alone that someone else owns, or whose digest already
+// matches, so repeating it writes nothing.
+const updateCardSQL = `UPDATE sessions SET title=$1, card=$2, card_updated_at=$3, digest=$4
+ WHERE source=$5 AND id=$6 AND (owner IS NULL OR owner=$7) AND digest IS DISTINCT FROM $4`
+
 const addOwnershipSQL = `INSERT INTO session_machines(source,id,machine) VALUES($1,$2,$3) ON CONFLICT DO NOTHING`
 const removeOwnershipSQL = `DELETE FROM session_machines WHERE machine=$1 AND source=$2 AND id=$3`
 
@@ -244,7 +257,8 @@ func syncRows(ctx context.Context, db conn, rows []store.ExportRow, opts Options
 	// rows whose tags differ are written, so a push with no changes writes nothing.
 	// A row this machine cannot file keeps the brain another machine gave it,
 	// and a row someone else owns is left alone.
-	var retags [][]any
+	var retags, cardUpdates [][]any
+	now := time.Now().UTC()
 	for _, item := range local {
 		if uploading[key(item)] {
 			continue
@@ -256,11 +270,18 @@ func syncRows(ctx context.Context, db conn, rows []store.ExportRow, opts Options
 		if args, stale := retagFor(prev, byKey[key(item)], opts); stale {
 			retags = append(retags, args)
 		}
+		if args, stale := cardFor(prev, byKey[key(item)], opts, now); stale {
+			cardUpdates = append(cardUpdates, args)
+		}
 	}
 	if _, err := execAll(ctx, db, "retag", retagSQL, retags, ownershipChunk); err != nil {
 		return stats, err
 	}
 	stats.Retagged = len(retags)
+	if _, err := execAll(ctx, db, "card", updateCardSQL, cardUpdates, upsertChunk); err != nil {
+		return stats, err
+	}
+	stats.CardsUpdated = len(cardUpdates)
 
 	// An unchanged shared chat still belongs to this machine. Rows it already owns
 	// are skipped, so a push with no changes writes nothing here.
@@ -342,6 +363,19 @@ func retagFor(prev Row, row store.ExportRow, opts Options) ([]any, bool) {
 	return nil, false
 }
 
+// cardFor decides whether an unchanged row needs a new title and card, and
+// with what. A row someone else owns is left alone. A row that was not annotated
+// (no digest) is never touched. Push and PushState.Pending both use it.
+func cardFor(prev Row, row store.ExportRow, opts Options, now time.Time) ([]any, bool) {
+	if row.Digest == "" || prev.Digest == row.Digest {
+		return nil, false
+	}
+	if prev.Owner != "" && prev.Owner != opts.Owner {
+		return nil, false
+	}
+	return []any{row.Title, nullable(row.Card), now, row.Digest, prev.Source, prev.ID, opts.Owner}, true
+}
+
 func brainOf(m *brainmap.Map, row store.ExportRow) string {
 	if row.CWD == nil {
 		return m.Brain("")
@@ -366,9 +400,9 @@ func loadRemote(ctx context.Context, db conn, query, machine string) ([]Row, err
 	var out []Row
 	for rows.Next() {
 		var row Row
-		var revision, fingerprint, owner, brain *string
+		var revision, fingerprint, owner, brain, digest *string
 		var repos any
-		if err := rows.Scan(&row.Source, &row.ID, &revision, &fingerprint, &owner, &brain, &repos, &row.Owned); err != nil {
+		if err := rows.Scan(&row.Source, &row.ID, &revision, &fingerprint, &owner, &brain, &repos, &digest, &row.Owned); err != nil {
 			return nil, sqlError("read", err)
 		}
 		if revision != nil {
@@ -382,6 +416,9 @@ func loadRemote(ctx context.Context, db conn, query, machine string) ([]Row, err
 		}
 		if brain != nil {
 			row.Brain = *brain
+		}
+		if digest != nil {
+			row.Digest = *digest
 		}
 		row.Repos, row.ReposKnown = parseRepos(repos)
 		out = append(out, row)
@@ -446,7 +483,16 @@ func upsertArgs(row store.ExportRow, machine, fingerprint, owner, brain string, 
 		row.Source, row.ID, machine, row.Provider, row.ProviderSessionID, row.CWD, row.Title, row.Path, row.OriginPath,
 		row.Revision, fingerprint, parseTime(row.StartedAt), parseTime(row.UpdatedAt), row.Body, payload,
 		nullable(owner), nullable(brain), reposArg(repos),
+		nullable(row.Card), cardTime(row), nullable(row.Digest),
 	}, nil
+}
+
+// cardTime is when the card was written: now, or NULL for a row with no card.
+func cardTime(row store.ExportRow) any {
+	if row.Card == "" {
+		return nil
+	}
+	return time.Now().UTC()
 }
 
 // parseRepos reads a text[] column scanned into any. PostgreSQL arrives as
