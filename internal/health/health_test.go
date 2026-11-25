@@ -184,3 +184,19 @@ func TestPostSlack(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+// An idle machine now connects only every remote.HeartbeatInterval. Even if one
+// of those heartbeats is lost and the timer fires late, it must stay ok with the
+// default --max-age, and the health check (every 6 hours) must not flag it.
+func TestIdleMachineWithSixHourHeartbeatIsNotStale(t *testing.T) {
+	worst := 2*remote.HeartbeatInterval + 2*15*time.Minute
+	if worst >= DefaultMaxAge {
+		t.Fatalf("worst idle gap %s reaches DefaultMaxAge %s", worst, DefaultMaxAge)
+	}
+	for _, age := range []time.Duration{remote.HeartbeatInterval, remote.HeartbeatInterval + 15*time.Minute, worst} {
+		row := &remote.HeartbeatRow{LastAttempt: *at(age), LastSuccess: at(age)}
+		if status, reason := Classify(row, now, DefaultMaxAge); status != OK {
+			t.Fatalf("idle %s: %s (%s)", age, status, reason)
+		}
+	}
+}

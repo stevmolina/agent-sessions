@@ -160,7 +160,7 @@ type Change struct {
 // Transitions compares the current report with what was last announced.
 // prev maps a machine to "bad" or "ok". A machine is announced when it turns bad
 // (including the first time it is seen bad) and when a bad one recovers. Nothing
-// else is sent, so a machine that stays down produces one message, not one an hour.
+// else is sent, so a machine that stays down produces one message, not one per check.
 func Transitions(prev map[string]string, machines []Machine) ([]Change, map[string]string) {
 	next := map[string]string{}
 	var changes []Change
