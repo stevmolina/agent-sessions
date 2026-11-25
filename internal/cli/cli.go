@@ -62,10 +62,10 @@ options:
 push options:
   --trigger            Start a push in the background and return at once.
                        Agent hooks call this when a turn ends. Only one push
-                       runs per machine; a request made during a push makes
-                       that push run once more when it finishes. At most one
-                       triggered push starts per 15 minutes; a request made
-                       sooner waits for the next timer run.
+                       runs per machine, and at most one starts per 15
+                       minutes. A request made during a push or sooner than
+                       that waits for the next run (the 15 minute timer, or a
+                       later trigger).
 
 push connects to the database only when the local index changed since the last
 successful push (~/.cache/sessions/push-state.json), or every 6 hours to write
@@ -444,18 +444,16 @@ type textCleaner interface {
 // for while another runs is folded into that one (see internal/pushlock).
 func pushLocked(out, errOut io.Writer) int {
 	dir := config.CacheDir()
-	code, ran, err := pushlock.Run(dir, func() int { return pushOnce(errOut) })
+	// One push per process. A request that arrives during it stays on disk and
+	// is served by the next timer run or by a trigger once the 15 minutes have
+	// passed, so hooks cannot chain pushes back to back (see pushlock.TriggerInterval).
+	code, ran, err := pushlock.RunAtMost(dir, 1, func() int { return pushOnce(errOut) })
 	if err != nil {
 		return fail(errOut, err)
 	}
 	if !ran {
-		fmt.Fprintln(errOut, "a push is already running; it will run once more when it finishes")
+		fmt.Fprintln(errOut, "a push is already running; this request waits for the next run")
 		return code
-	}
-	// Run stops after MaxRuns. A request still waiting then gets its own
-	// background push now instead of waiting up to 15 minutes for the timer.
-	if pushlock.Pending(dir) && !pushlock.Held(dir) {
-		pushTrigger(errOut)
 	}
 	return code
 }
@@ -521,7 +519,9 @@ func pushOnce(errOut io.Writer) int {
 			recorded = true
 		}
 		cancel()
-		if !res.connected {
+		if err != nil {
+			// Spaces out the next failure report, and makes the next good push
+			// write a heartbeat so health sees the recovery (failureReportedSince).
 			_ = writeStamp(filepath.Join(dir, failureHeartbeatName), start)
 		}
 	}
@@ -568,18 +568,34 @@ const (
 
 func pushStatePath(dir string) string { return filepath.Join(dir, pushStateName) }
 
+// lastFailureReport is when this machine last tried to record a failed push.
+func lastFailureReport(dir string) (time.Time, bool) {
+	raw, err := os.ReadFile(filepath.Join(dir, failureHeartbeatName))
+	if err != nil {
+		return time.Time{}, false
+	}
+	last, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(raw)))
+	if err != nil {
+		return time.Time{}, false
+	}
+	return last, true
+}
+
 // failureHeartbeatDue spaces out heartbeats for pushes that failed before they
 // reached the database. A missing or broken stamp means due.
 func failureHeartbeatDue(dir string, now time.Time) bool {
-	raw, err := os.ReadFile(filepath.Join(dir, failureHeartbeatName))
-	if err != nil {
-		return true
-	}
-	last, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(raw)))
-	if err != nil || last.After(now) {
+	last, ok := lastFailureReport(dir)
+	if !ok || last.After(now) {
 		return true
 	}
 	return now.Sub(last) >= remote.FailureHeartbeatInterval
+}
+
+// failureReportedSince reports whether a failure was recorded after the last
+// good heartbeat.
+func failureReportedSince(dir string, heartbeat time.Time) bool {
+	last, ok := lastFailureReport(dir)
+	return ok && last.After(heartbeat)
 }
 
 func writeStamp(path string, t time.Time) error {
@@ -675,11 +691,20 @@ func runPush(errOut io.Writer) (pushResult, error) {
 		prev = nil
 	}
 	now := time.Now()
-	reason := prev.Pending(rows, opts, version.String())
+	database, dbErr := remote.DatabaseID(ctx)
+	if dbErr != nil {
+		database = "" // Pending treats an unknown database as a change
+	}
+	reason := prev.Pending(rows, opts, version.String(), database)
+	if reason == "" && prev != nil && failureReportedSince(config.CacheDir(), prev.HeartbeatAt) {
+		// health may show this machine failing; the next good push must say it
+		// recovered instead of waiting for the 6 hour heartbeat.
+		reason = "last push failed"
+	}
 	if reason == "" && !prev.HeartbeatDue(now) {
 		res.idle = true
 		res.heartbeatIn = remote.HeartbeatInterval - now.Sub(prev.HeartbeatAt)
-		res.skipped += len(prev.Failed)
+		res.skipped += prev.StillFailing(rows)
 		return res, nil
 	}
 	if reason == "" {
@@ -693,7 +718,7 @@ func runPush(errOut io.Writer) (pushResult, error) {
 	}
 	res.skipped += res.stats.Failed
 	if err == nil {
-		res.state = remote.NewPushState(opts, version.String(), res.stats, time.Now())
+		res.state = remote.NewPushState(opts, version.String(), database, res.stats, time.Now())
 		if prev != nil {
 			// pushOnce moves this to now once the heartbeat is written. If that
 			// fails, the old time stands and the next run tries again when due.

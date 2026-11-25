@@ -52,11 +52,19 @@ func Pending(dir string) bool {
 // holder looks for requests once more after it unlocks. So a request is either
 // seen by the holder or finds the lock free, and none is lost.
 func Run(dir string, push func() int) (code int, ran bool, err error) {
+	return RunAtMost(dir, MaxRuns, push)
+}
+
+// RunAtMost is Run with its own cap on pushes per process. With maxRuns 1, a
+// request that arrives during the push is not served by this process: its
+// marker stays on disk for the next run (the timer, or a later trigger), which
+// is how `sessions push` keeps to one push per TriggerInterval.
+func RunAtMost(dir string, maxRuns int, push func() int) (code int, ran bool, err error) {
 	if err := MarkPending(dir); err != nil {
 		return 0, false, err
 	}
 	runs := 0
-	for runs < MaxRuns {
+	for runs < maxRuns {
 		release, err := TryLock(dir)
 		if errors.Is(err, ErrBusy) {
 			return code, runs > 0, nil
@@ -64,7 +72,7 @@ func Run(dir string, push func() int) (code int, ran bool, err error) {
 		if err != nil {
 			return code, runs > 0, err
 		}
-		for runs < MaxRuns && TakePending(dir) {
+		for runs < maxRuns && TakePending(dir) {
 			code = push()
 			runs++
 		}

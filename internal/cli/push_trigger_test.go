@@ -92,3 +92,22 @@ func TestFailureHeartbeatAtMostHourly(t *testing.T) {
 		t.Fatal("failure not reported after an hour")
 	}
 }
+
+// After a failure was reported, the next good push must heartbeat even when
+// nothing changed, or health keeps showing the machine failing for hours.
+func TestFailureReportForcesTheNextHeartbeat(t *testing.T) {
+	dir := t.TempDir()
+	good := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	if failureReportedSince(dir, good) {
+		t.Fatal("no failure on record")
+	}
+	if err := writeStamp(filepath.Join(dir, failureHeartbeatName), good.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if !failureReportedSince(dir, good) {
+		t.Fatal("a failure after the last good heartbeat must force one")
+	}
+	if failureReportedSince(dir, good.Add(2*time.Hour)) {
+		t.Fatal("a failure before the last good heartbeat is already cleared")
+	}
+}

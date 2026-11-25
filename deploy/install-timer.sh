@@ -80,7 +80,7 @@ Description=Push cleaned session transcripts
 Type=oneshot
 ExecStart=${bin} push
 Environment=PATH=${path}
-# One run can loop up to five pushes (pushlock.MaxRuns), each with a 10 minute cap.
+# One run is one push, with an 11 minute watchdog; the limit leaves wide margin.
 TimeoutStartSec=60min
 EOF
   cat > "${dir}/sessions-push.timer" <<EOF

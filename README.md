@@ -36,7 +36,7 @@ sessions show SOURCE:ID --remote
 sessions mcp
 ```
 
-`push --trigger` is for agent hooks. It returns at once and pushes in the background, at most once per 15 minutes per machine; a request made sooner waits for the next timer run. One push runs per machine; a request made during a push makes that push run once more. `push` connects to the database only when something changed since the last successful push, or every 6 hours for a heartbeat. `health` prints each machine's last push from the shared database and flags a machine whose last attempt failed or that has not pushed in 24 hours. See [docs/remote-sync.md](docs/remote-sync.md#keeping-it-running).
+`push --trigger` is for agent hooks. It returns at once and pushes in the background, at most once per 15 minutes per machine; a request made sooner waits for the next timer run. One push runs per machine; a request made during a push also waits for the next run. `push` connects to the database only when something changed since the last successful push, or every 6 hours for a heartbeat. `health` prints each machine's last push from the shared database and flags a machine whose last attempt failed or that has not pushed in 24 hours. See [docs/remote-sync.md](docs/remote-sync.md#keeping-it-running).
 
 `push` needs `SESSIONS_OWNER` and files each session under a brain; see [Owner and brain](#owner-and-brain).
 

@@ -1,11 +1,17 @@
 package remote
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/usuario/sessions/internal/store"
 )
@@ -35,12 +41,14 @@ const stateFormat = 1
 // push compares the local index with it and skips the database when a push
 // would write nothing. A missing or unreadable file means a normal push.
 type PushState struct {
-	Format      int       `json:"format"`
-	Binary      string    `json:"binary"`
-	Machine     string    `json:"machine"`
-	Owner       string    `json:"owner"`
-	Fingerprint string    `json:"fingerprint"`
-	PushedAt    time.Time `json:"pushed_at"`
+	Format      int    `json:"format"`
+	Binary      string `json:"binary"`
+	Machine     string `json:"machine"`
+	Owner       string `json:"owner"`
+	Fingerprint string `json:"fingerprint"`
+	// Database names the database the record describes (see DatabaseID).
+	Database string    `json:"database"`
+	PushedAt time.Time `json:"pushed_at"`
 	// HeartbeatAt is the last heartbeat this machine recorded after a
 	// successful push. Zero when that heartbeat could not be written.
 	HeartbeatAt time.Time `json:"heartbeat_at"`
@@ -52,10 +60,11 @@ type PushState struct {
 }
 
 // NewPushState records a successful push.
-func NewPushState(opts Options, binary string, stats Stats, now time.Time) *PushState {
+func NewPushState(opts Options, binary, database string, stats Stats, now time.Time) *PushState {
 	return &PushState{
 		Format:      stateFormat,
 		Binary:      binary,
+		Database:    database,
 		Machine:     opts.Machine,
 		Owner:       opts.Owner,
 		Fingerprint: opts.Fingerprint,
@@ -63,6 +72,42 @@ func NewPushState(opts Options, binary string, stats Stats, now time.Time) *Push
 		Remote:      stats.Remote,
 		Failed:      stats.FailedRows,
 	}
+}
+
+// DatabaseID names the database DATABASE_URL points at: a short hash of its
+// host, port and database name. It reads the URL (env or Doppler) but never
+// connects, and the password is not part of it. A push to a new or reset
+// database is then a change, not something to wait 6 hours for.
+func DatabaseID(ctx context.Context) (string, error) {
+	url, err := Secret(ctx, "DATABASE_URL")
+	if err != nil {
+		return "", err
+	}
+	cfg, err := pgx.ParseConfig(url)
+	if err != nil {
+		return "", fmt.Errorf("remote database unavailable")
+	}
+	sum := sha256.Sum256([]byte(cfg.Host + ":" + strconv.Itoa(int(cfg.Port)) + "/" + cfg.Database))
+	return hex.EncodeToString(sum[:8]), nil
+}
+
+// StillFailing counts the recorded verification failures that are still in the
+// index at the same revision. A failed row deleted since is no longer skipped.
+func (s *PushState) StillFailing(rows []store.ExportRow) int {
+	if s == nil || len(s.Failed) == 0 {
+		return 0
+	}
+	failedAt := make(map[string]string, len(s.Failed))
+	for _, row := range s.Failed {
+		failedAt[key(row)] = row.Revision
+	}
+	n := 0
+	for _, row := range rows {
+		if rev, ok := failedAt[key(Row{Source: row.Source, ID: row.ID})]; ok && rev == row.Revision {
+			n++
+		}
+	}
+	return n
 }
 
 // LoadState reads the record of the last push. Any problem returns an error,
@@ -110,12 +155,15 @@ func (s *PushState) HeartbeatDue(now time.Time) bool {
 // write nothing. It runs the same plan as Push against the recorded state:
 // changed or new sessions, deletions and ownership releases, ownership claims,
 // and stale owner, brain or repo tags all count. opts.Machine must be set.
-func (s *PushState) Pending(rows []store.ExportRow, opts Options, binary string) string {
+// database is DatabaseID for the database this push would write to.
+func (s *PushState) Pending(rows []store.ExportRow, opts Options, binary, database string) string {
 	switch {
 	case s == nil:
 		return "no record of the last push"
 	case s.Binary != binary:
 		return "new binary"
+	case database == "" || s.Database != database:
+		return "database changed"
 	case s.Machine != opts.Machine:
 		return "host name changed"
 	case s.Owner != opts.Owner:

@@ -72,3 +72,24 @@ func TestDebouncedRequestIsServedByNextRun(t *testing.T) {
 		t.Fatal("marker left after the run that served it")
 	}
 }
+
+// One push per process: a request made during it waits on disk for the next run
+// instead of starting a second push right away.
+func TestRunAtMostOnceLeavesLateRequestsForTheNextRun(t *testing.T) {
+	dir := t.TempDir()
+	calls := 0
+	_, ran, err := RunAtMost(dir, 1, func() int {
+		calls++
+		_ = MarkPending(dir) // a turn ends during the push
+		return 0
+	})
+	if err != nil || !ran || calls != 1 {
+		t.Fatalf("ran=%v err=%v calls=%d", ran, err, calls)
+	}
+	if !Pending(dir) {
+		t.Fatal("the late request was dropped")
+	}
+	if _, ran, _ := RunAtMost(dir, 1, func() int { calls++; return 0 }); !ran || calls != 2 || Pending(dir) {
+		t.Fatalf("next run did not serve the request: ran=%v calls=%d pending=%v", ran, calls, Pending(dir))
+	}
+}

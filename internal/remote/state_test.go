@@ -12,7 +12,10 @@ import (
 	"github.com/usuario/sessions/internal/store"
 )
 
-const testBinary = "abc123"
+const (
+	testBinary   = "abc123"
+	testDatabase = "db1"
+)
 
 // pushAndRecord runs a real sync against the SQLite double and returns the
 // state a successful push would save.
@@ -22,7 +25,7 @@ func pushAndRecord(t *testing.T, db conn, rows []store.ExportRow, opts Options) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewPushState(opts, testBinary, stats, time.Now())
+	return NewPushState(opts, testBinary, testDatabase, stats, time.Now())
 }
 
 func twoRows() []store.ExportRow {
@@ -41,7 +44,7 @@ func TestPendingIsEmptyAfterPushAndPushAgreesItWritesNothing(t *testing.T) {
 	opts.Repos = func(store.ExportRow, bool) []string { return []string{"acme/app"} }
 	rows := twoRows()
 	state := pushAndRecord(t, db, rows, opts)
-	if reason := state.Pending(rows, opts, testBinary); reason != "" {
+	if reason := state.Pending(rows, opts, testBinary, testDatabase); reason != "" {
 		t.Fatalf("nothing changed, but Pending says %q", reason)
 	}
 	db.execs = 0
@@ -104,7 +107,7 @@ func TestPendingSeesEveryKindOfChange(t *testing.T) {
 			opts.Repos = func(store.ExportRow, bool) []string { return []string{"acme/app"} }
 			state := pushAndRecord(t, db, twoRows(), opts)
 			rows := tc.change(twoRows(), &opts)
-			if reason := state.Pending(rows, opts, testBinary); !strings.Contains(reason, tc.want) {
+			if reason := state.Pending(rows, opts, testBinary, testDatabase); !strings.Contains(reason, tc.want) {
 				t.Fatalf("Pending = %q, want it to mention %q", reason, tc.want)
 			}
 		})
@@ -118,7 +121,7 @@ func TestPendingIgnoresDeletesWhenDeletesAreBlocked(t *testing.T) {
 	opts := testOpts("machine-a", true)
 	state := pushAndRecord(t, db, twoRows(), opts)
 	opts.AllowDelete = false
-	if reason := state.Pending(twoRows()[:1], opts, testBinary); reason != "" {
+	if reason := state.Pending(twoRows()[:1], opts, testBinary, testDatabase); reason != "" {
 		t.Fatalf("deletes are blocked, Pending = %q", reason)
 	}
 }
@@ -135,15 +138,21 @@ func TestPendingSkipsRowsThatFailedVerificationAtTheSameRevision(t *testing.T) {
 	if len(state.Failed) != 1 || state.Failed[0].ID != "bad" {
 		t.Fatalf("failed rows not recorded: %+v", state.Failed)
 	}
-	if reason := state.Pending(rows, opts, testBinary); reason != "" {
+	if n := state.StillFailing(rows); n != 1 {
+		t.Fatalf("StillFailing = %d, want 1", n)
+	}
+	if n := state.StillFailing(rows[:2]); n != 0 {
+		t.Fatalf("the failing row was deleted, StillFailing = %d", n)
+	}
+	if reason := state.Pending(rows, opts, testBinary, testDatabase); reason != "" {
 		t.Fatalf("same failing row, Pending = %q", reason)
 	}
 	// While a row fails, deletes stay blocked, so a missing row is no change either.
-	if reason := state.Pending([]store.ExportRow{rows[0], bad}, opts, testBinary); reason != "" {
+	if reason := state.Pending([]store.ExportRow{rows[0], bad}, opts, testBinary, testDatabase); reason != "" {
 		t.Fatalf("deletes are blocked by the failing row, Pending = %q", reason)
 	}
 	rows[2].Revision = "2"
-	if reason := state.Pending(rows, opts, testBinary); reason == "" {
+	if reason := state.Pending(rows, opts, testBinary, testDatabase); reason == "" {
 		t.Fatal("the failing row changed: that must be pushed")
 	}
 }
@@ -156,7 +165,7 @@ func TestPendingRowWithNoTurnsIsNotAlwaysChanged(t *testing.T) {
 	empty.Turns = []model.Turn{}
 	opts := testOpts("machine-a", true)
 	state := pushAndRecord(t, db, []store.ExportRow{empty}, opts)
-	if reason := state.Pending([]store.ExportRow{empty}, opts, testBinary); reason != "" {
+	if reason := state.Pending([]store.ExportRow{empty}, opts, testBinary, testDatabase); reason != "" {
 		t.Fatalf("Pending = %q", reason)
 	}
 }
@@ -170,7 +179,7 @@ func TestPendingClaimsAndNeverTaggedRows(t *testing.T) {
 	unowned := *state
 	unowned.Remote = append([]Row(nil), state.Remote...)
 	unowned.Remote[0].Owned = false
-	if reason := unowned.Pending(rows, opts, testBinary); !strings.Contains(reason, "claim") {
+	if reason := unowned.Pending(rows, opts, testBinary, testDatabase); !strings.Contains(reason, "claim") {
 		t.Fatalf("unowned row, Pending = %q", reason)
 	}
 
@@ -183,7 +192,7 @@ func TestPendingClaimsAndNeverTaggedRows(t *testing.T) {
 		}
 		return nil
 	}
-	if reason := state.Pending(rows, opts, testBinary); !strings.Contains(reason, "repo tags") {
+	if reason := state.Pending(rows, opts, testBinary, testDatabase); !strings.Contains(reason, "repo tags") {
 		t.Fatalf("untagged rows, Pending = %q", reason)
 	}
 	if scans != 0 {
@@ -194,12 +203,39 @@ func TestPendingClaimsAndNeverTaggedRows(t *testing.T) {
 func TestPendingWithoutRecordOrAfterUpgrade(t *testing.T) {
 	var none *PushState
 	opts := testOpts("machine-a", true)
-	if none.Pending(twoRows(), opts, testBinary) == "" {
+	if none.Pending(twoRows(), opts, testBinary, testDatabase) == "" {
 		t.Fatal("no record must mean a normal push")
 	}
 	state := pushAndRecord(t, ownershipDB(t), twoRows(), opts)
-	if !strings.Contains(state.Pending(twoRows(), opts, "newer"), "new binary") {
+	if !strings.Contains(state.Pending(twoRows(), opts, "newer", testDatabase), "new binary") {
 		t.Fatal("a new binary must push once (it may migrate the schema)")
+	}
+	for _, db := range []string{"db2", ""} {
+		if !strings.Contains(state.Pending(twoRows(), opts, testBinary, db), "database changed") {
+			t.Fatalf("database %q: a new or unknown database must get a full push", db)
+		}
+	}
+}
+
+func TestDatabaseIDIgnoresPasswordAndNamesTheDatabase(t *testing.T) {
+	ctx := context.Background()
+	id := func(url string) string {
+		t.Setenv("DATABASE_URL", url)
+		got, err := DatabaseID(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	a := id("postgres://u:one@db.example:5432/neondb?sslmode=require")
+	if a != id("postgres://u:two@db.example:5432/neondb?sslmode=require") {
+		t.Fatal("a password rotation must not look like a new database")
+	}
+	if strings.Contains(a, "one") || len(a) != 16 {
+		t.Fatalf("id %q", a)
+	}
+	if a == id("postgres://u:one@other.example:5432/neondb") || a == id("postgres://u:one@db.example:5432/otherdb") {
+		t.Fatal("another host or database must get another id")
 	}
 }
 
@@ -223,7 +259,7 @@ func TestStateRoundTripAndFallbacks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reason := loaded.Pending(twoRows(), opts, testBinary); reason != "" {
+	if reason := loaded.Pending(twoRows(), opts, testBinary, testDatabase); reason != "" {
 		t.Fatalf("reloaded state lost detail, Pending = %q", reason)
 	}
 	if !loaded.HeartbeatAt.Equal(state.HeartbeatAt) {
