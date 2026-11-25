@@ -41,6 +41,21 @@ DO $$ BEGIN
  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'sessions' AND column_name = 'repos') THEN
   ALTER TABLE sessions ADD COLUMN repos text[];
  END IF;
+ -- card is a 3 to 6 line summary of the chat (where, what was asked, decided,
+ -- shipped, how it ended), built from the cleaned transcript when the session
+ -- is pushed. card_updated_at is when it was last written. digest is a short
+ -- hash of the title and card content; a push compares it to decide whether a
+ -- row needs a new card without reading the transcript again. NULL means no
+ -- card yet. brain-mcp reads card and card_updated_at: keep these names.
+ IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'sessions' AND column_name = 'card') THEN
+  ALTER TABLE sessions ADD COLUMN card text;
+ END IF;
+ IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'sessions' AND column_name = 'card_updated_at') THEN
+  ALTER TABLE sessions ADD COLUMN card_updated_at timestamptz;
+ END IF;
+ IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'sessions' AND column_name = 'digest') THEN
+  ALTER TABLE sessions ADD COLUMN digest text;
+ END IF;
 END $$;
 
 CREATE INDEX IF NOT EXISTS sessions_machine_idx ON sessions (machine);

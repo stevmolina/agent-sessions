@@ -21,6 +21,10 @@ func NormalizeProvider(name string) string {
 		return "cursor"
 	case "grok":
 		return "grok"
+	case "antigravity", "gemini":
+		return "antigravity"
+	case "muse":
+		return "muse"
 	case "opencode":
 		return "opencode"
 	default:
@@ -29,7 +33,7 @@ func NormalizeProvider(name string) string {
 }
 
 func KnownSources() []string {
-	return []string{"cursor", "claude", "codex", "t3code", SourceChatGPT, SourceClaudeAI, SourceGrok}
+	return []string{"cursor", "claude", "codex", "t3code", SourceChatGPT, SourceClaudeAI, SourceGrok, SourceAntigravity, SourceGrokCLI, SourceMuse}
 }
 
 func ValidSource(value string) bool {
@@ -42,7 +46,7 @@ func ValidSource(value string) bool {
 }
 
 func KnownProviders() []string {
-	return []string{"cursor", "claude", "codex", "grok", "opencode"}
+	return []string{"cursor", "claude", "codex", "grok", "opencode", "antigravity", "muse"}
 }
 
 func ParseProvider(value string) (string, bool) {

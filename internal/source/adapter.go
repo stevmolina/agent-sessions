@@ -18,12 +18,20 @@ type SourceAdapter interface {
 }
 
 func Adapters() []SourceAdapter {
-	return []SourceAdapter{JSONL{}, T3{}, Imports{}}
+	return []SourceAdapter{JSONL{}, T3{}, Imports{}, Antigravity{}, GrokCLI{}, Muse{}}
 }
 
 func AdapterFor(source string) SourceAdapter {
 	if source == "t3code" {
 		return T3{}
+	}
+	switch source {
+	case SourceAntigravity:
+		return Antigravity{}
+	case SourceGrokCLI:
+		return GrokCLI{}
+	case SourceMuse:
+		return Muse{}
 	}
 	if isImportSource(source) {
 		return Imports{}

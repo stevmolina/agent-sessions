@@ -95,7 +95,12 @@ func (Imports) Discover() ([]Candidate, error) {
 var ErrSkipped = errors.New("skipped")
 
 // SkipError says which file was set aside and why.
-type SkipError struct{ Path, Reason string }
+type SkipError struct {
+	Path, Reason string
+	// Quiet marks a skip that is normal and repeats on every refresh (an empty
+	// conversation), so the index does not print a warning for it.
+	Quiet bool
+}
 
 func (e *SkipError) Error() string        { return e.Path + ": " + e.Reason }
 func (e *SkipError) Is(target error) bool { return target == ErrSkipped }

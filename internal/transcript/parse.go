@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/usuario/sessions/internal/config"
+	"github.com/usuario/sessions/internal/digest"
 	"github.com/usuario/sessions/internal/model"
 )
 
@@ -261,19 +262,7 @@ func stringPtr(v string) *string {
 	}
 	return &v
 }
-func firstTitle(turns []model.Turn) string {
-	for _, t := range turns {
-		if t.Role == "user" && strings.TrimSpace(t.Text) != "" {
-			line := strings.Join(strings.Fields(t.Text), " ")
-			if utf8.RuneCountInString(line) > 160 {
-				r := []rune(line)
-				line = strings.TrimSpace(string(r[:159])) + "…"
-			}
-			return line
-		}
-	}
-	return ""
-}
+func firstTitle(turns []model.Turn) string { return digest.Title(turns, "") }
 func parentDir(path string) string {
 	parts := strings.Split(filepath.ToSlash(path), "/")
 	for i, p := range parts {

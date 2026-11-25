@@ -20,6 +20,7 @@ var requiredColumns = []string{
 	"source", "id", "machine", "provider", "provider_session_id", "cwd", "title",
 	"path", "origin_path", "revision", "clean_fingerprint", "started_at", "updated_at",
 	"body", "turns", "pushed_at", "search", "owner", "brain", "repos",
+	"card", "card_updated_at", "digest",
 }
 
 type Stats struct {
@@ -27,6 +28,8 @@ type Stats struct {
 	// Retagged are unchanged rows whose owner or brain was rewritten. They are
 	// also counted in Unchanged, since their content was not uploaded again.
 	Retagged int
+	// CardsUpdated are unchanged rows that got a new title and card in place.
+	CardsUpdated int
 	// SkippedPaths are rows that failed the pre-upload verification.
 	SkippedPaths []string
 	// Remote is the database's state for this machine's rows after the push:

@@ -30,6 +30,17 @@ func CodexRoot() string  { return envPath("SESSIONS_CODEX_ROOT", ".codex/session
 func CodexArchiveRoot() string {
 	return envPath("SESSIONS_CODEX_ARCHIVE_ROOT", ".codex/archived_sessions")
 }
+
+// AntigravityRoot is the Gemini home; every antigravity*/conversations folder
+// under it holds one SQLite database per conversation.
+func AntigravityRoot() string { return envPath("SESSIONS_ANTIGRAVITY_ROOT", ".gemini") }
+
+// GrokRoot holds Grok CLI sessions: <url-encoded folder>/<session id>/chat_history.jsonl.
+func GrokRoot() string { return envPath("SESSIONS_GROK_ROOT", ".grok/sessions") }
+
+// MuseRoot holds Muse sessions: YYYY/MM/DD/<session id>/session.jsonl.
+func MuseRoot() string { return envPath("SESSIONS_MUSE_ROOT", ".local/share/muse/sessions") }
+
 func T3Root() string { return envPath("SESSIONS_T3_ROOT", ".t3/userdata") }
 
 // ImportsRoot holds conversations imported from chat app exports, one JSON file

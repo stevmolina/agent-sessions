@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/usuario/sessions/internal/config"
+	"github.com/usuario/sessions/internal/digest"
 	"github.com/usuario/sessions/internal/model"
 	_ "modernc.org/sqlite"
 )
@@ -448,15 +449,4 @@ func stringPtr(v string) *string {
 	return &v
 }
 
-func firstTitle(turns []model.Turn) string {
-	for _, t := range turns {
-		if t.Role == "user" && strings.TrimSpace(t.Text) != "" {
-			line := strings.Join(strings.Fields(t.Text), " ")
-			if r := []rune(line); len(r) > 160 {
-				line = strings.TrimSpace(string(r[:159])) + "…"
-			}
-			return line
-		}
-	}
-	return ""
-}
+func firstTitle(turns []model.Turn) string { return digest.Title(turns, "") }

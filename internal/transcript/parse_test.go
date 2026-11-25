@@ -94,7 +94,7 @@ func TestLargeLineAndUnicodeTitle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len([]rune(s.Title)) != 160 || !strings.HasSuffix(s.Title, "…") {
+	if len([]rune(s.Title)) != 80 || !strings.HasSuffix(s.Title, "…") {
 		t.Fatalf("title runes=%d", len([]rune(s.Title)))
 	}
 }

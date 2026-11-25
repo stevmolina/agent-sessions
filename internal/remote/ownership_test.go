@@ -78,7 +78,7 @@ func ownershipDB(t *testing.T) sqliteConn {
 	t.Cleanup(func() { db.Close() })
 	db.SetMaxOpenConns(1)
 	_, err = db.Exec(`PRAGMA foreign_keys=ON;
- CREATE TABLE sessions(source text,id text,machine text,provider text,provider_session_id text,cwd text,title text,path text,origin_path text,revision text,clean_fingerprint text,started_at text,updated_at text,body text,turns text,pushed_at text DEFAULT CURRENT_TIMESTAMP,owner text,brain text,repos text,PRIMARY KEY(source,id));
+ CREATE TABLE sessions(source text,id text,machine text,provider text,provider_session_id text,cwd text,title text,path text,origin_path text,revision text,clean_fingerprint text,started_at text,updated_at text,body text,turns text,pushed_at text DEFAULT CURRENT_TIMESTAMP,owner text,brain text,repos text,card text,card_updated_at text,digest text,PRIMARY KEY(source,id));
  CREATE TABLE session_machines(source text,id text,machine text,PRIMARY KEY(source,id,machine),FOREIGN KEY(source,id) REFERENCES sessions(source,id) ON DELETE RESTRICT);`)
 	if err != nil {
 		t.Fatal(err)

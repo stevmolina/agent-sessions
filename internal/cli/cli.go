@@ -31,7 +31,7 @@ import (
 	"github.com/usuario/sessions/internal/version"
 )
 
-const commands = "{index,search,show,push,import,health,version,mcp}"
+const commands = "{index,search,show,push,import,health,backfill-cards,version,mcp}"
 
 const help = `usage: sessions [-h] ` + commands + ` ...
 
@@ -99,7 +99,7 @@ health options:
                        (default ~/.cache/sessions/health-alert.json).
 
 search options:
-  --source cursor|claude|codex|t3code|chatgpt|claude-ai|grok
+  --source cursor|claude|codex|t3code|chatgpt|claude-ai|grok|grok-cli|antigravity|muse
                        Where the conversation was opened. Literal; does not
                        rewrite a native hit to its T3 twin.
   --provider cursor|claude|codex|grok|opencode
@@ -162,6 +162,8 @@ func Main(args []string, out, errOut io.Writer) int {
 		return importCmd(args[1:], out, errOut)
 	case "health":
 		return healthCmd(args[1:], out, errOut)
+	case "backfill-cards":
+		return backfillCmd(args[1:], out, errOut)
 	case "version":
 		if len(args) > 1 {
 			return usage(errOut, "unrecognized arguments: "+strings.Join(args[1:], " "))
@@ -169,7 +171,7 @@ func Main(args []string, out, errOut io.Writer) int {
 		fmt.Fprintln(out, version.String())
 		return 0
 	default:
-		return usage(errOut, "argument command: invalid choice: '"+args[0]+"' (choose from 'index', 'search', 'show', 'push', 'import', 'health', 'version', 'mcp')")
+		return usage(errOut, "argument command: invalid choice: '"+args[0]+"' (choose from 'index', 'search', 'show', 'push', 'import', 'health', 'backfill-cards', 'version', 'mcp')")
 	}
 }
 func usage(w io.Writer, msg string) int {
@@ -536,8 +538,8 @@ func pushOnce(errOut io.Writer) int {
 			fmt.Fprintln(errOut, "push state not saved (the next push connects anyway): "+serr.Error())
 		}
 	}
-	fmt.Fprintf(errOut, "%d uploaded, %d unchanged (%d retagged), %d deleted, %d failed in %.1fs\n",
-		res.stats.Uploaded, res.stats.Unchanged, res.stats.Retagged, res.stats.Deleted, res.skipped, time.Since(start).Seconds())
+	fmt.Fprintf(errOut, "%d uploaded, %d unchanged (%d retagged, %d cards), %d deleted, %d failed in %.1fs\n",
+		res.stats.Uploaded, res.stats.Unchanged, res.stats.Retagged, res.stats.CardsUpdated, res.stats.Deleted, res.skipped, time.Since(start).Seconds())
 	if res.skipped > 0 {
 		return 1
 	}
@@ -671,6 +673,10 @@ func runPush(errOut io.Writer) (pushResult, error) {
 	if err != nil || machine == "" {
 		return res, errors.New("host name unavailable")
 	}
+	// Give every row a clean title and a card before anything reads it, so the
+	// redaction check below and the "would anything change" check see the same text.
+	brainsMap := brains
+	remote.Annotate(rows, machine, brainsMap)
 	// Each row about to be uploaded must still redact to itself.
 	verify := func(row store.ExportRow) bool { return rowStillClean(checker, row) }
 	opts := remote.Options{
@@ -914,6 +920,37 @@ func healthCmd(args []string, out, errOut io.Writer) int {
 	return 0
 }
 
+// backfillCmd gives every row in the shared database a clean title and a card.
+func backfillCmd(args []string, out, errOut io.Writer) int {
+	dry := false
+	for _, a := range args {
+		if a != "--dry-run" {
+			return usage(errOut, "unrecognized arguments: "+a)
+		}
+		dry = true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	cleaner, err := clean.Load(ctx)
+	if err != nil {
+		return fail(errOut, errors.New("could not read redaction secrets from Doppler (is doppler logged in?)"))
+	}
+	checker, ok := any(cleaner).(textCleaner)
+	if !ok {
+		return fail(errOut, errors.New("redaction unavailable"))
+	}
+	stats, err := remote.BackfillCards(ctx, func(text string) bool { return stillClean(checker, text) }, dry)
+	if err != nil {
+		return fail(errOut, err)
+	}
+	verb := "updated"
+	if dry {
+		verb = "would update"
+	}
+	fmt.Fprintf(out, "%d rows read, %s %d, %d skipped, in %.1fs\n", stats.Rows, verb, stats.Updated, stats.Skipped, stats.Elapsed.Seconds())
+	return 0
+}
+
 func splitList(s string) []string {
 	var out []string
 	for _, part := range strings.Split(s, ",") {
@@ -931,7 +968,7 @@ func envOr(name, fallback string) string {
 	return fallback
 }
 func rowStillClean(checker textCleaner, row store.ExportRow) bool {
-	if !stillClean(checker, row.Title) || !stillClean(checker, row.Body) {
+	if !stillClean(checker, row.Title) || !stillClean(checker, row.Body) || !stillClean(checker, row.Card) {
 		return false
 	}
 	for _, turn := range row.Turns {
