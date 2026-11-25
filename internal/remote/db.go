@@ -29,6 +29,10 @@ type Stats struct {
 	Retagged int
 	// SkippedPaths are rows that failed the pre-upload verification.
 	SkippedPaths []string
+	// Remote is the database's state for this machine's rows after the push:
+	// every row it has locally or owns. FailedRows are the local rows that
+	// failed verification, with the revision that failed.
+	Remote, FailedRows []Row
 }
 
 type conn interface {

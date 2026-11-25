@@ -1,11 +1,13 @@
 #!/bin/sh
-# Install the hourly health check on one always-on Linux machine (today: ovh).
+# Install the 6-hourly health check on one always-on Linux machine (today: ovh).
 #
 #   sh deploy/install-health-timer.sh CHANNEL_ID "host-a,host-b,host-c"
 #
-# Each hour it runs `sessions health --notify-slack CHANNEL_ID`, which posts only
-# when a machine turns bad or recovers. Announced state lives in
-# ~/.cache/sessions/health-alert.json. The Slack bot token is read from Doppler
+# Every 6 hours it runs `sessions health --notify-slack CHANNEL_ID`, which posts
+# only when a machine turns bad or recovers. It was hourly until 2026-11-24; each
+# run wakes the Neon database, and the free plan's compute quota ran out. Idle
+# machines now write a heartbeat every 6 hours, and --max-age stays 24 hours.
+# Announced state lives in ~/.cache/sessions/health-alert.json. The Slack bot token is read from Doppler
 # (claudito/prd) at run time; nothing secret is written here.
 set -eu
 channel="${1:?usage: install-health-timer.sh CHANNEL_ID EXPECTED_MACHINES}"
@@ -28,11 +30,11 @@ TimeoutStartSec=5min
 EOF
 cat > "${dir}/sessions-health.timer" <<EOF
 [Unit]
-Description=Check session push health every hour
+Description=Check session push health every 6 hours
 
 [Timer]
 OnBootSec=10min
-OnUnitActiveSec=1h
+OnUnitActiveSec=6h
 AccuracySec=1min
 Persistent=true
 
@@ -45,4 +47,4 @@ systemctl --user is-active --quiet sessions-health.timer || die "sessions-health
 if [ "$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null || echo unknown)" != "yes" ]; then
   echo "warning: linger is off, so the timer stops when you log out (sudo loginctl enable-linger $(id -un))" >&2
 fi
-echo "ok: sessions-health.timer is enabled and active (hourly; journalctl --user -u sessions-health)"
+echo "ok: sessions-health.timer is enabled and active (every 6 hours; journalctl --user -u sessions-health)"

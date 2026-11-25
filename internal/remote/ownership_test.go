@@ -32,6 +32,10 @@ func sqliteArgs(args []any) []any {
 			raw, _ := json.Marshal(list)
 			a = string(raw)
 		}
+		// jsonb arrives as []byte; store it as text, as Postgres compares it.
+		if raw, ok := a.([]byte); ok {
+			a = string(raw)
+		}
 		out[i] = a
 	}
 	return out

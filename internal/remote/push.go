@@ -44,6 +44,14 @@ const remoteStateSQL = `SELECT s.source, s.id,
  s.clean_fingerprint, s.owner, s.brain, s.repos,
  EXISTS (SELECT 1 FROM session_machines m WHERE m.source=s.source AND m.id=s.id AND m.machine=$1)
  FROM sessions s`
+
+// afterStateSQL is remoteStateSQL with the stored revision as is. It is read
+// after a push for PushState: a row just uploaded with no turns must not look
+// changed on every later run.
+const afterStateSQL = `SELECT s.source, s.id, s.revision,
+ s.clean_fingerprint, s.owner, s.brain, s.repos,
+ EXISTS (SELECT 1 FROM session_machines m WHERE m.source=s.source AND m.id=s.id AND m.machine=$1)
+ FROM sessions s`
 const addOwnershipSQL = `INSERT INTO session_machines(source,id,machine) VALUES($1,$2,$3) ON CONFLICT DO NOTHING`
 const removeOwnershipSQL = `DELETE FROM session_machines WHERE machine=$1 AND source=$2 AND id=$3`
 
@@ -163,7 +171,7 @@ func syncRows(ctx context.Context, db conn, rows []store.ExportRow, opts Options
 		return Stats{}, errNoOwner
 	}
 	machine, fingerprint, allowDelete := opts.Machine, opts.Fingerprint, opts.AllowDelete
-	remoteRows, err := loadRemote(ctx, db, machine)
+	remoteRows, err := loadRemote(ctx, db, remoteStateSQL, machine)
 	if err != nil {
 		return Stats{}, err
 	}
@@ -245,24 +253,8 @@ func syncRows(ctx context.Context, db conn, rows []store.ExportRow, opts Options
 		if !ok {
 			continue
 		}
-		if prev.Owner != "" && prev.Owner != opts.Owner {
-			continue // another person's row: neither its owner nor its brain is ours to set
-		}
-		brain := brainOf(opts.Brains, byKey[key(item)])
-		brainStale := brain != "" && prev.Brain != brain
-		var repos any
-		reposStale := false
-		if opts.Repos != nil {
-			// Never-tagged rows get the full transcript scan once; tagged rows
-			// only re-check the folder, which is cheap.
-			merged := mergeRepos(prev.Repos, opts.Repos(byKey[key(item)], !prev.ReposKnown))
-			if !prev.ReposKnown || !sameRepos(prev.Repos, merged) {
-				reposStale = true
-				repos = merged
-			}
-		}
-		if prev.Owner == "" || brainStale || reposStale {
-			retags = append(retags, []any{opts.Owner, nullable(brain), item.Source, item.ID, repos})
+		if args, stale := retagFor(prev, byKey[key(item)], opts); stale {
+			retags = append(retags, args)
 		}
 	}
 	if _, err := execAll(ctx, db, "retag", retagSQL, retags, ownershipChunk); err != nil {
@@ -298,7 +290,56 @@ func syncRows(ctx context.Context, db conn, rows []store.ExportRow, opts Options
 		return stats, err
 	}
 	stats.Deleted = int(deleted)
+
+	// What the database now holds for this machine's rows, read inside the same
+	// transaction. The caller saves it so the next push can tell, without
+	// connecting, whether it would write anything (see PushState).
+	after, err := loadRemote(ctx, db, afterStateSQL, machine)
+	if err != nil {
+		return stats, err
+	}
+	localKeys := make(map[string]bool, len(all))
+	for _, item := range all {
+		localKeys[key(item)] = true
+	}
+	for _, row := range after {
+		if row.Owned || localKeys[key(row)] {
+			stats.Remote = append(stats.Remote, row)
+		}
+	}
+	for _, item := range all {
+		if failed[key(item)] {
+			stats.FailedRows = append(stats.FailedRows, item)
+		}
+	}
 	return stats, nil
+}
+
+// retagFor decides whether an unchanged row needs its tags rewritten, and with
+// what. A row someone else owns is left alone: neither its owner nor its brain
+// is ours to set. Push and PushState.Pending both use it, so the local
+// "nothing changed" answer cannot drift from what a real push would write.
+func retagFor(prev Row, row store.ExportRow, opts Options) ([]any, bool) {
+	if prev.Owner != "" && prev.Owner != opts.Owner {
+		return nil, false
+	}
+	brain := brainOf(opts.Brains, row)
+	brainStale := brain != "" && prev.Brain != brain
+	var repos any
+	reposStale := false
+	if opts.Repos != nil {
+		// Never-tagged rows get the full transcript scan once; tagged rows
+		// only re-check the folder, which is cheap.
+		merged := mergeRepos(prev.Repos, opts.Repos(row, !prev.ReposKnown))
+		if !prev.ReposKnown || !sameRepos(prev.Repos, merged) {
+			reposStale = true
+			repos = merged
+		}
+	}
+	if prev.Owner == "" || brainStale || reposStale {
+		return []any{opts.Owner, nullable(brain), prev.Source, prev.ID, repos}, true
+	}
+	return nil, false
 }
 
 func brainOf(m *brainmap.Map, row store.ExportRow) string {
@@ -316,8 +357,8 @@ func nullable(value string) any {
 	return value
 }
 
-func loadRemote(ctx context.Context, db conn, machine string) ([]Row, error) {
-	rows, err := db.Query(ctx, remoteStateSQL, machine)
+func loadRemote(ctx context.Context, db conn, query, machine string) ([]Row, error) {
+	rows, err := db.Query(ctx, query, machine)
 	if err != nil {
 		return nil, sqlError("read", err)
 	}

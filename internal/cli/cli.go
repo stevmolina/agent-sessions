@@ -62,8 +62,14 @@ options:
 push options:
   --trigger            Start a push in the background and return at once.
                        Agent hooks call this when a turn ends. Only one push
-                       runs per machine; a request made during a push makes
-                       that push run once more when it finishes.
+                       runs per machine, and at most one starts per 15
+                       minutes. A request made during a push or sooner than
+                       that waits for the next run (the 15 minute timer, or a
+                       later trigger).
+
+push connects to the database only when the local index changed since the last
+successful push (~/.cache/sessions/push-state.json), or every 6 hours to write
+a heartbeat.
 
 push needs SESSIONS_OWNER (your WorkOS user id; env, else Doppler project
 sessions). Each session is filed under a brain by its folder, using
@@ -438,18 +444,16 @@ type textCleaner interface {
 // for while another runs is folded into that one (see internal/pushlock).
 func pushLocked(out, errOut io.Writer) int {
 	dir := config.CacheDir()
-	code, ran, err := pushlock.Run(dir, func() int { return pushOnce(errOut) })
+	// One push per process. A request that arrives during it stays on disk and
+	// is served by the next timer run or by a trigger once the 15 minutes have
+	// passed, so hooks cannot chain pushes back to back (see pushlock.TriggerInterval).
+	code, ran, err := pushlock.RunAtMost(dir, 1, func() int { return pushOnce(errOut) })
 	if err != nil {
 		return fail(errOut, err)
 	}
 	if !ran {
-		fmt.Fprintln(errOut, "a push is already running; it will run once more when it finishes")
+		fmt.Fprintln(errOut, "a push is already running; this request waits for the next run")
 		return code
-	}
-	// Run stops after MaxRuns. A request still waiting then gets its own
-	// background push now instead of waiting up to 15 minutes for the timer.
-	if pushlock.Pending(dir) && !pushlock.Held(dir) {
-		pushTrigger(errOut)
 	}
 	return code
 }
@@ -458,6 +462,10 @@ func pushLocked(out, errOut io.Writer) int {
 // shared heartbeat table.
 func pushOnce(errOut io.Writer) int {
 	start := time.Now()
+	dir := config.CacheDir()
+	if err := pushlock.MarkRun(dir, start); err != nil {
+		fmt.Fprintln(errOut, "push start not recorded: "+err.Error())
+	}
 	// The upload has a 10 minute context, but reading transcripts does not. A read
 	// stuck on a hung disk or network mount would hold the push lock forever and
 	// every later trigger would just queue behind it. Exit instead; the kernel
@@ -468,6 +476,17 @@ func pushOnce(errOut io.Writer) int {
 	})
 	defer watchdog.Stop()
 	res, err := runPush(errOut)
+	if err == nil && res.idle {
+		// Nothing to write and the heartbeat is not due: no database connection,
+		// so Neon can suspend. See remote.HeartbeatInterval.
+		fmt.Fprintf(errOut, "nothing changed since the last push; no database connection (heartbeat due in %s)\n",
+			res.heartbeatIn.Round(time.Minute))
+		if res.skipped > 0 {
+			fmt.Fprintf(errOut, "%d session(s) still skipped: could not be cleaned\n", res.skipped)
+			return 1
+		}
+		return 0
+	}
 	hb := remote.Heartbeat{
 		OK:        err == nil,
 		Uploaded:  res.stats.Uploaded,
@@ -485,16 +504,37 @@ func pushOnce(errOut io.Writer) int {
 			hb.Error = pub.public
 		}
 	}
-	if machine, merr := remote.Machine(); merr == nil && machine != "" {
+	// A push that reached for the database records its heartbeat. A push that
+	// failed before that (Doppler, the index, a missing owner) reports at most
+	// once per remote.FailureHeartbeatInterval, so a broken machine does not keep
+	// the database awake either.
+	heartbeat := res.connected || failureHeartbeatDue(dir, start)
+	recorded := false
+	if machine, merr := remote.Machine(); heartbeat && merr == nil && machine != "" {
 		hb.Machine = machine
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		if herr := remote.RecordHeartbeat(ctx, hb); herr != nil {
 			fmt.Fprintln(errOut, "heartbeat not recorded: "+herr.Error())
+		} else {
+			recorded = true
 		}
 		cancel()
+		if err != nil {
+			// Spaces out the next failure report, and makes the next good push
+			// write a heartbeat so health sees the recovery (failureReportedSince).
+			_ = writeStamp(filepath.Join(dir, failureHeartbeatName), start)
+		}
 	}
 	if err != nil {
 		return fail(errOut, err)
+	}
+	if res.state != nil {
+		if recorded {
+			res.state.HeartbeatAt = time.Now().UTC()
+		}
+		if serr := remote.SaveState(pushStatePath(dir), res.state); serr != nil {
+			fmt.Fprintln(errOut, "push state not saved (the next push connects anyway): "+serr.Error())
+		}
 	}
 	fmt.Fprintf(errOut, "%d uploaded, %d unchanged (%d retagged), %d deleted, %d failed in %.1fs\n",
 		res.stats.Uploaded, res.stats.Unchanged, res.stats.Retagged, res.stats.Deleted, res.skipped, time.Since(start).Seconds())
@@ -511,6 +551,55 @@ const pushWatchdog = 11 * time.Minute
 type pushResult struct {
 	stats   remote.Stats
 	skipped int // sessions left out because they could not be cleaned
+	// connected is true once the push reached for the database.
+	connected bool
+	// idle is true when nothing changed and no heartbeat was due, so the push
+	// stopped before connecting. heartbeatIn is how long until one is due.
+	idle        bool
+	heartbeatIn time.Duration
+	// state is the record to save after a successful push.
+	state *remote.PushState
+}
+
+const (
+	pushStateName        = "push-state.json"
+	failureHeartbeatName = "push.failure-heartbeat"
+)
+
+func pushStatePath(dir string) string { return filepath.Join(dir, pushStateName) }
+
+// lastFailureReport is when this machine last tried to record a failed push.
+func lastFailureReport(dir string) (time.Time, bool) {
+	raw, err := os.ReadFile(filepath.Join(dir, failureHeartbeatName))
+	if err != nil {
+		return time.Time{}, false
+	}
+	last, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(raw)))
+	if err != nil {
+		return time.Time{}, false
+	}
+	return last, true
+}
+
+// failureHeartbeatDue spaces out heartbeats for pushes that failed before they
+// reached the database. A missing or broken stamp means due.
+func failureHeartbeatDue(dir string, now time.Time) bool {
+	last, ok := lastFailureReport(dir)
+	if !ok || last.After(now) {
+		return true
+	}
+	return now.Sub(last) >= remote.FailureHeartbeatInterval
+}
+
+// failureReportedSince reports whether a failure was recorded after the last
+// good heartbeat.
+func failureReportedSince(dir string, heartbeat time.Time) bool {
+	last, ok := lastFailureReport(dir)
+	return ok && last.After(heartbeat)
+}
+
+func writeStamp(path string, t time.Time) error {
+	return os.WriteFile(path, []byte(t.UTC().Format(time.RFC3339Nano)+"\n"), 0o600)
 }
 
 // publicError keeps the full message for the terminal and a fixed one for the
@@ -584,7 +673,7 @@ func runPush(errOut io.Writer) (pushResult, error) {
 	}
 	// Each row about to be uploaded must still redact to itself.
 	verify := func(row store.ExportRow) bool { return rowStillClean(checker, row) }
-	res.stats, err = remote.Push(ctx, rows, remote.Options{
+	opts := remote.Options{
 		Fingerprint: fingerprint,
 		Machine:     machine,
 		AllowDelete: stats.Failed == 0,
@@ -592,11 +681,50 @@ func runPush(errOut io.Writer) (pushResult, error) {
 		Owner:       owner,
 		Brains:      brains,
 		Repos:       repotag.New().ForPush,
-	})
+	}
+	// Decide locally whether this push would write anything. The record of the
+	// last successful push says what the database holds for this machine; when
+	// it matches and no heartbeat is due, do not connect at all.
+	statePath := pushStatePath(config.CacheDir())
+	prev, stateErr := remote.LoadState(statePath)
+	if stateErr != nil {
+		prev = nil
+	}
+	now := time.Now()
+	database, dbErr := remote.DatabaseID(ctx)
+	if dbErr != nil {
+		database = "" // Pending treats an unknown database as a change
+	}
+	reason := prev.Pending(rows, opts, version.String(), database)
+	if reason == "" && prev != nil && failureReportedSince(config.CacheDir(), prev.HeartbeatAt) {
+		// health may show this machine failing; the next good push must say it
+		// recovered instead of waiting for the 6 hour heartbeat.
+		reason = "last push failed"
+	}
+	if reason == "" && !prev.HeartbeatDue(now) {
+		res.idle = true
+		res.heartbeatIn = remote.HeartbeatInterval - now.Sub(prev.HeartbeatAt)
+		res.skipped += prev.StillFailing(rows)
+		return res, nil
+	}
+	if reason == "" {
+		reason = "heartbeat due"
+	}
+	fmt.Fprintln(errOut, "pushing: "+reason)
+	res.connected = true
+	res.stats, err = remote.Push(ctx, rows, opts)
 	for _, path := range res.stats.SkippedPaths {
 		fmt.Fprintln(errOut, "redaction failed, skipped "+path)
 	}
 	res.skipped += res.stats.Failed
+	if err == nil {
+		res.state = remote.NewPushState(opts, version.String(), database, res.stats, time.Now())
+		if prev != nil {
+			// pushOnce moves this to now once the heartbeat is written. If that
+			// fails, the old time stands and the next run tries again when due.
+			res.state.HeartbeatAt = prev.HeartbeatAt
+		}
+	}
 	return res, err
 }
 
@@ -611,6 +739,11 @@ func pushTrigger(errOut io.Writer) int {
 		return 0
 	}
 	if pushlock.Held(dir) {
+		return 0
+	}
+	// At most one hook-started push per pushlock.TriggerInterval. The marker
+	// stays, so the next timer run or a later trigger serves this request.
+	if !pushlock.TriggerAllowed(dir, time.Now()) {
 		return 0
 	}
 	self, err := os.Executable()
