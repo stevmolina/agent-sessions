@@ -13,7 +13,7 @@ import (
 
 // Version changes when the title or card rules change. It is part of the
 // digest, so a new version refreshes every card on the next push.
-const Version = "2"
+const Version = "3"
 
 // Input is what a card is built from. Brain and Machine are tags from the
 // pusher; everything else comes from the cleaned transcript.
@@ -34,7 +34,7 @@ var (
 	prURL      = regexp.MustCompile(`https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/(\d+)`)
 	shipVerb   = regexp.MustCompile(`(?i)\b(opened|created|merged|shipped|pushed|auto-merge|ready for review|squash)`)
 	mergedHash = regexp.MustCompile("(?i)\\bmerge[d]?(?: commit)?[^\\n.]{0,40}?\\b`?([0-9a-f]{7,40})`?\\b")
-	decideWord = regexp.MustCompile(`(?i)\b((?:we|i|you|steven) (?:decided|chose|agreed)|decided (?:to|on|that)|going with|(?:we|i)(?:'ll| will) (?:use|go with|keep)|root cause (?:is|was)|root cause:|the (?:fix|plan) is|approved)\b`)
+	decideWord = regexp.MustCompile(`(?i)\b((?:we|i|steven) (?:decided|chose|agreed)|decided (?:to|on|that)|going with|(?:we|i)(?:'ll| will) (?:use|go with|keep)|root cause (?:is|was)|root cause:|the (?:fix|plan) is)\b`)
 	hasDigit   = regexp.MustCompile(`[0-9]`)
 	worktree   = regexp.MustCompile(`/worktrees/([^/]+)/`)
 )
